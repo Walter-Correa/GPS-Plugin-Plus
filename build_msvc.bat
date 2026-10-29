@@ -7,6 +7,30 @@ echo ========================================================
 
 cd /d "%~dp0"
 
+:: Auto-detect CMake in PATH, WinGet, or Visual Studio
+where cmake >nul 2>nul
+if errorlevel 1 (
+    for /d %%D in ("%LOCALAPPDATA%\Microsoft\WinGet\Packages\Kitware.CMake_*") do (
+        for /d %%C in ("%%D\cmake-*\bin") do (
+            if exist "%%C\cmake.exe" set "PATH=%%C;!PATH!"
+        )
+    )
+)
+where cmake >nul 2>nul
+if errorlevel 1 (
+    if exist "%ProgramFiles(x86)%\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" (
+        set "PATH=%ProgramFiles(x86)%\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;!PATH!"
+    ) else if exist "%ProgramFiles%\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" (
+        set "PATH=%ProgramFiles%\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;!PATH!"
+    )
+)
+
+where cmake >nul 2>nul
+if errorlevel 1 (
+    echo [ERROR] CMake could not be found. Please ensure CMake or Visual Studio is installed.
+    exit /b 1
+)
+
 :: Configure
 echo [1/3] Configuring CMake (Win32)...
 cmake -B "build-msvc" -G "Visual Studio 17 2022" -A Win32
