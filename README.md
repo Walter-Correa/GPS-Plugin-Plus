@@ -462,31 +462,49 @@ public OnPlayerUpdate(playerid)
 ## Building from Source
 
 ### Prerequisites
-* CMake 3.19 or higher
-* 32-bit C++17 compatible compiler (MSVC 2019/2022 on Windows, GCC/Clang with multilib on Linux)
-* Git submodules enabled (`git clone --recursive`)
+* **CMake 3.19 or higher**
+* **Windows:** Visual Studio 2019 or 2022 (MSVC v142/v143) with the *Desktop development with C++* workload.
+  > [!IMPORTANT]
+  > On Windows, **MSVC is strictly required** to build the native open.mp component due to C++ ABI compatibility with `omp-server.exe`.
+* **Linux:** GCC 8+ or Clang with 32-bit multilib (`gcc-multilib g++-multilib`).
+* Git submodules enabled (`git clone --recursive`).
 
 ### Compiling on Windows
-```bash
+
+#### Option A: 1-Click Build Script (Recommended)
+Simply execute the provided batch script from the repository root:
+```cmd
+build_msvc.bat
+```
+This script automatically discovers CMake and Visual Studio, builds both the **SA-MP Plugin** and the **native open.mp Component** in Win32 Release mode, and packages the standalone distribution zip into `dist/GPS-Plugin-Plus-Windows.zip`.
+
+*(Optional)* You can pass your server directory to automatically deploy the files:
+```cmd
+build_msvc.bat "C:\MyServer"
+```
+
+#### Option B: Manual CMake Commands
+```cmd
 git clone --recursive https://github.com/Walter-Correa/GPS-Plugin-Plus.git
 cd GPS-Plugin-Plus
-cmake -B build -A Win32 -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
+cmake -B build-msvc -G "Visual Studio 17 2022" -A Win32
+cmake --build build-msvc --config Release
 ```
 
 ### Compiling on Linux
 ```bash
 git clone --recursive https://github.com/Walter-Correa/GPS-Plugin-Plus.git
 cd GPS-Plugin-Plus
-sudo dpkg --add-architecture i386
-sudo apt-get update && sudo apt-get install -y gcc-multilib g++-multilib
+sudo apt-get update && sudo apt-get install -y gcc-multilib g++-multilib zip
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-m32" -DCMAKE_CXX_FLAGS="-m32"
 cmake --build build --config Release
 ```
 
-The build produces:
-* **Traditional SA-MP Plugin:** `build/GPS.dll` (Windows) / `build/GPS.so` (Linux)
-* **Native open.mp Component:** `build/components/GPS.dll` (Windows) / `build/components/GPS.so` (Linux)
+### Build Outputs
+Each build produces:
+* **Traditional SA-MP Plugin:** `plugins/GPS.dll` (Windows) / `plugins/GPS.so` (Linux)
+* **Native open.mp Component:** `components/GPS.dll` (Windows) / `components/GPS.so` (Linux)
+* **Standalone Release Archive:** `dist/GPS-Plugin-Plus-Windows.zip` / `dist/GPS-Plugin-Plus-Linux.zip`
 
 ---
 
