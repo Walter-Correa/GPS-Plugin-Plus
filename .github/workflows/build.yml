@@ -34,31 +34,29 @@ jobs:
       - name: Prepare Package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path package/plugins
-          New-Item -ItemType Directory -Force -Path package/components
-          New-Item -ItemType Directory -Force -Path package/include
-          New-Item -ItemType Directory -Force -Path package/scriptfiles
+          New-Item -ItemType Directory -Force -Path package/plugins | Out-Null
+          New-Item -ItemType Directory -Force -Path package/components | Out-Null
+          New-Item -ItemType Directory -Force -Path package/include | Out-Null
+          New-Item -ItemType Directory -Force -Path package/scriptfiles | Out-Null
 
           # Copy Plugin
-          if (Test-Path "build/Release/GPS.dll") {
-            Copy-Item "build/Release/GPS.dll" "package/plugins/GPS.dll"
-          } elseif (Test-Path "build/GPS.dll") {
-            Copy-Item "build/GPS.dll" "package/plugins/GPS.dll"
+          $pluginDll = Get-ChildItem -Path "build" -Filter "GPS.dll" -Recurse | Where-Object { $_.FullName -notmatch "components" } | Select-Object -First 1
+          if ($pluginDll) {
+            Copy-Item $pluginDll.FullName "package/plugins/GPS.dll" -Force
           }
 
           # Copy Component
-          if (Test-Path "build/components/Release/GPS.dll") {
-            Copy-Item "build/components/Release/GPS.dll" "package/components/GPS.dll"
-          } elseif (Test-Path "build/components/GPS.dll") {
-            Copy-Item "build/components/GPS.dll" "package/components/GPS.dll"
+          $compDll = Get-ChildItem -Path "build" -Filter "GPS.dll" -Recurse | Where-Object { $_.FullName -match "components" } | Select-Object -First 1
+          if ($compDll) {
+            Copy-Item $compDll.FullName "package/components/GPS.dll" -Force
           }
 
-          # Copy Includes, Data, and Example
-          Copy-Item "GPS.inc" "package/include/GPS.inc"
-          Copy-Item "GPS.dat" "package/scriptfiles/GPS.dat"
-          Copy-Item "Example.pwn" "package/Example.pwn"
-          Copy-Item "README.md" "package/README.md"
-          Copy-Item "LICENSE" "package/LICENSE"
+          # Copy Includes, Data, Examples and Docs
+          if (Test-Path "GPS.inc") { Copy-Item "GPS.inc" "package/include/GPS.inc" -Force }
+          if (Test-Path "GPS.dat") { Copy-Item "GPS.dat" "package/scriptfiles/GPS.dat" -Force }
+          if (Test-Path "Example.pwn") { Copy-Item "Example.pwn" "package/Example.pwn" -Force }
+          if (Test-Path "README.md") { Copy-Item "README.md" "package/README.md" -Force }
+          if (Test-Path "LICENSE") { Copy-Item "LICENSE" "package/LICENSE" -Force }
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
@@ -77,12 +75,11 @@ jobs:
 
       - name: Install 32-bit Multilib
         run: |
-          sudo dpkg --add-architecture i386
           sudo apt-get update
           sudo apt-get install -y gcc-multilib g++-multilib
 
       - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-m32" -DCMAKE_CXX_FLAGS="-m32"
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-m32" -DCMAKE_CXX_FLAGS="-m32" -DCMAKE_SHARED_LINKER_FLAGS="-m32" -DCMAKE_MODULE_LINKER_FLAGS="-m32"
 
       - name: Build
         run: cmake --build build --config Release
@@ -92,25 +89,23 @@ jobs:
           mkdir -p package/plugins package/components package/include package/scriptfiles
 
           # Copy Plugin
-          if [ -f "build/GPS.so" ]; then
-            cp "build/GPS.so" "package/plugins/GPS.so"
-          elif [ -f "build/Release/GPS.so" ]; then
-            cp "build/Release/GPS.so" "package/plugins/GPS.so"
+          PLUGIN_SO=$(find build -name "GPS.so" | grep -v "components" | head -n 1)
+          if [ -n "$PLUGIN_SO" ]; then
+            cp "$PLUGIN_SO" "package/plugins/GPS.so"
           fi
 
           # Copy Component
-          if [ -f "build/components/GPS.so" ]; then
-            cp "build/components/GPS.so" "package/components/GPS.so"
-          elif [ -f "build/components/Release/GPS.so" ]; then
-            cp "build/components/Release/GPS.so" "package/components/GPS.so"
+          COMP_SO=$(find build -name "GPS.so" | grep "components" | head -n 1)
+          if [ -n "$COMP_SO" ]; then
+            cp "$COMP_SO" "package/components/GPS.so"
           fi
 
-          # Copy Includes, Data, and Example
-          cp "GPS.inc" "package/include/GPS.inc"
-          cp "GPS.dat" "package/scriptfiles/GPS.dat"
-          cp "Example.pwn" "package/Example.pwn"
-          cp "README.md" "package/README.md"
-          cp "LICENSE" "package/LICENSE"
+          # Copy Includes, Data, Examples and Docs
+          [ -f "GPS.inc" ] && cp "GPS.inc" "package/include/GPS.inc"
+          [ -f "GPS.dat" ] && cp "GPS.dat" "package/scriptfiles/GPS.dat"
+          [ -f "Example.pwn" ] && cp "Example.pwn" "package/Example.pwn"
+          [ -f "README.md" ] && cp "README.md" "package/README.md"
+          [ -f "LICENSE" ] && cp "LICENSE" "package/LICENSE"
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4

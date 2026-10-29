@@ -60,3 +60,5 @@ x64/
 *.dll
 
 release-*/
+dist/
+package/

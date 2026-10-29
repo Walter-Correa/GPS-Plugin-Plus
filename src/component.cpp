@@ -73,7 +73,7 @@ public:
 		auto line_count = 0, node_count = 0, connection_count = 0;
 		if (!File::LoadNodes("GPS.dat", line_count, node_count, connection_count))
 		{
-			core_->printLn("[GPS component]: Failed to open \"GPS.dat\"!");
+			core_->printLn("%s", "[GPS component]: Failed to open \"GPS.dat\"!");
 		}
 		else
 		{
