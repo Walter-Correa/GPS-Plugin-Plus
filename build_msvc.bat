@@ -47,33 +47,55 @@ if errorlevel 1 (
     exit /b %errorlevel%
 )
 
-:: Stage artifacts locally into dist/
-echo [3/3] Staging output files to dist...
+:: Package and create Zip archive
+echo [3/3] Creating zip package...
+set "STAGE_DIR=package-msvc"
+if exist "%STAGE_DIR%" rmdir /s /q "%STAGE_DIR%"
 if not exist "dist" mkdir "dist"
-if not exist "dist\plugins" mkdir "dist\plugins"
-if not exist "dist\components" mkdir "dist\components"
-if not exist "dist\include" mkdir "dist\include"
-if not exist "dist\scriptfiles" mkdir "dist\scriptfiles"
+
+mkdir "%STAGE_DIR%\plugins"
+mkdir "%STAGE_DIR%\components"
+mkdir "%STAGE_DIR%\include"
+mkdir "%STAGE_DIR%\scriptfiles"
 
 if exist "build-msvc\Release\GPS.dll" (
-    copy /Y "build-msvc\Release\GPS.dll" "dist\plugins\GPS.dll" >nul
-    echo  - Staged dist\plugins\GPS.dll
+    copy /Y "build-msvc\Release\GPS.dll" "%STAGE_DIR%\plugins\GPS.dll" >nul
 )
-
 if exist "build-msvc\components\Release\GPS.dll" (
-    copy /Y "build-msvc\components\Release\GPS.dll" "dist\components\GPS.dll" >nul
-    echo  - Staged dist\components\GPS.dll
+    copy /Y "build-msvc\components\Release\GPS.dll" "%STAGE_DIR%\components\GPS.dll" >nul
 )
-
 if exist "GPS.inc" (
-    copy /Y "GPS.inc" "dist\include\GPS.inc" >nul
-    echo  - Staged dist\include\GPS.inc
+    copy /Y "GPS.inc" "%STAGE_DIR%\include\GPS.inc" >nul
+)
+if exist "GPS.dat" (
+    copy /Y "GPS.dat" "%STAGE_DIR%\scriptfiles\GPS.dat" >nul
+)
+if exist "Example.pwn" (
+    copy /Y "Example.pwn" "%STAGE_DIR%\Example.pwn" >nul
+)
+if exist "LICENSE" (
+    copy /Y "LICENSE" "%STAGE_DIR%\LICENSE" >nul
 )
 
-if exist "GPS.dat" (
-    copy /Y "GPS.dat" "dist\scriptfiles\GPS.dat" >nul
-    echo  - Staged dist\scriptfiles\GPS.dat
+:: Clean up previous files in dist
+if exist "dist\GPS-Plugin-Plus-Windows.zip" del /f /q "dist\GPS-Plugin-Plus-Windows.zip"
+if exist "dist\plugins" rmdir /s /q "dist\plugins"
+if exist "dist\components" rmdir /s /q "dist\components"
+if exist "dist\include" rmdir /s /q "dist\include"
+if exist "dist\scriptfiles" rmdir /s /q "dist\scriptfiles"
+
+:: Generate zip archive
+where tar.exe >nul 2>nul
+if not errorlevel 1 (
+    tar.exe -a -c -f "dist\GPS-Plugin-Plus-Windows.zip" -C "%STAGE_DIR%" *
+) else (
+    powershell -Command "Import-Module Microsoft.PowerShell.Archive; Compress-Archive -Path '%STAGE_DIR%\*' -DestinationPath 'dist\GPS-Plugin-Plus-Windows.zip' -Force"
 )
+
+:: Clean up staging folder
+if exist "%STAGE_DIR%" rmdir /s /q "%STAGE_DIR%"
+
+echo [SUCCESS] Package created: dist\GPS-Plugin-Plus-Windows.zip
 
 :: Optional deployment if target path is passed as argument or env var
 set "TARGET_DIR=%~1"
@@ -83,10 +105,10 @@ if not "%TARGET_DIR%"=="" (
     if exist "%TARGET_DIR%" (
         echo.
         echo Deploying to target directory: %TARGET_DIR%
-        if exist "dist\components\GPS.dll" if exist "%TARGET_DIR%\components" copy /Y "dist\components\GPS.dll" "%TARGET_DIR%\components\GPS.dll" >nul
-        if exist "dist\plugins\GPS.dll" if exist "%TARGET_DIR%\plugins" copy /Y "dist\plugins\GPS.dll" "%TARGET_DIR%\plugins\GPS.dll" >nul
-        if exist "dist\include\GPS.inc" if exist "%TARGET_DIR%\pawno\include" copy /Y "dist\include\GPS.inc" "%TARGET_DIR%\pawno\include\GPS.inc" >nul
-        if exist "dist\scriptfiles\GPS.dat" if exist "%TARGET_DIR%\scriptfiles" copy /Y "dist\scriptfiles\GPS.dat" "%TARGET_DIR%\scriptfiles\GPS.dat" >nul
+        if exist "build-msvc\components\Release\GPS.dll" if exist "%TARGET_DIR%\components" copy /Y "build-msvc\components\Release\GPS.dll" "%TARGET_DIR%\components\GPS.dll" >nul
+        if exist "build-msvc\Release\GPS.dll" if exist "%TARGET_DIR%\plugins" copy /Y "build-msvc\Release\GPS.dll" "%TARGET_DIR%\plugins\GPS.dll" >nul
+        if exist "GPS.inc" if exist "%TARGET_DIR%\pawno\include" copy /Y "GPS.inc" "%TARGET_DIR%\pawno\include\GPS.inc" >nul
+        if exist "GPS.dat" if exist "%TARGET_DIR%\scriptfiles" copy /Y "GPS.dat" "%TARGET_DIR%\scriptfiles\GPS.dat" >nul
         echo Deployment complete.
     )
 )

@@ -51,18 +51,23 @@ jobs:
             Copy-Item $compDll.FullName "package/components/GPS.dll" -Force
           }
 
-          # Copy Includes, Data, Examples and Docs
+          # Copy Includes, Data, Examples and License (no README.md)
           if (Test-Path "GPS.inc") { Copy-Item "GPS.inc" "package/include/GPS.inc" -Force }
           if (Test-Path "GPS.dat") { Copy-Item "GPS.dat" "package/scriptfiles/GPS.dat" -Force }
           if (Test-Path "Example.pwn") { Copy-Item "Example.pwn" "package/Example.pwn" -Force }
-          if (Test-Path "README.md") { Copy-Item "README.md" "package/README.md" -Force }
           if (Test-Path "LICENSE") { Copy-Item "LICENSE" "package/LICENSE" -Force }
+
+      - name: Compress Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path package/* -DestinationPath dist/GPS-Plugin-Plus-Windows.zip -Force
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v4
         with:
           name: GPS-Plugin-Plus-Windows
-          path: package/
+          path: dist/GPS-Plugin-Plus-Windows.zip
 
   build-linux-release:
     runs-on: ubuntu-22.04
@@ -76,7 +81,7 @@ jobs:
       - name: Install 32-bit Multilib
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-multilib g++-multilib
+          sudo apt-get install -y gcc-multilib g++-multilib zip
 
       - name: Configure CMake
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-m32" -DCMAKE_CXX_FLAGS="-m32" -DCMAKE_SHARED_LINKER_FLAGS="-m32" -DCMAKE_MODULE_LINKER_FLAGS="-m32"
@@ -100,18 +105,22 @@ jobs:
             cp "$COMP_SO" "package/components/GPS.so"
           fi
 
-          # Copy Includes, Data, Examples and Docs
+          # Copy Includes, Data, Examples and License (no README.md)
           [ -f "GPS.inc" ] && cp "GPS.inc" "package/include/GPS.inc"
           [ -f "GPS.dat" ] && cp "GPS.dat" "package/scriptfiles/GPS.dat"
           [ -f "Example.pwn" ] && cp "Example.pwn" "package/Example.pwn"
-          [ -f "README.md" ] && cp "README.md" "package/README.md"
           [ -f "LICENSE" ] && cp "LICENSE" "package/LICENSE"
+
+      - name: Compress Package
+        run: |
+          mkdir -p dist
+          (cd package && zip -r ../dist/GPS-Plugin-Plus-Linux.zip .)
 
       - name: Upload Linux Artifact
         uses: actions/upload-artifact@v4
         with:
           name: GPS-Plugin-Plus-Linux
-          path: package/
+          path: dist/GPS-Plugin-Plus-Linux.zip
 
   create-release:
     needs: [build-windows-release, build-linux-release]
@@ -126,21 +135,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: GPS-Plugin-Plus-Windows
-          path: release-win
+          path: dist
 
       - name: Download Linux Artifact
         uses: actions/download-artifact@v4
         with:
           name: GPS-Plugin-Plus-Linux
-          path: release-linux
-
-      - name: Create Zip Archives
-        run: |
-          mkdir -p dist
-          (cd release-win && zip -r ../dist/GPS-Plugin-Plus-Windows.zip .)
-          (cd release-linux && zip -r ../dist/GPS-Plugin-Plus-Linux.zip .)
-          cp GPS.inc dist/GPS.inc
-          cp GPS.dat dist/GPS.dat
+          path: dist
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
@@ -148,6 +149,4 @@ jobs:
           files: |
             dist/GPS-Plugin-Plus-Windows.zip
             dist/GPS-Plugin-Plus-Linux.zip
-            dist/GPS.inc
-            dist/GPS.dat
           generate_release_notes: true
