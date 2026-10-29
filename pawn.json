@@ -1,8 +1,8 @@
 {
 	"user": "Walter-Correa",
 	"repo": "GPS-Plugin-Plus",
-	"entry": "test.pwn",
-	"output": "test.amx",
+	"entry": "Example.pwn",
+	"output": "Example.amx",
 	"dependencies": [
 		"sampctl/samp-stdlib"
 	],

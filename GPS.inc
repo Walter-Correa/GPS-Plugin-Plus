@@ -129,18 +129,6 @@ native IsPointAgainstTraffic(Float:x, Float:y, Float:z, Float:facing_angle, &boo
 native GetPathTurnDirection(Path:pathid, index, &TurnDirection:turn, &Float:turn_angle);
 native GetPathEstimatedTravelTime(Path:pathid, Float:average_speed_kmh, &Float:seconds);
 
-stock bool:IsPlayerDrivingAgainstTraffic(playerid)
-{
-    if (!IsPlayerInAnyVehicle(playerid)) return false;
-    new vehicleid = GetPlayerVehicleID(playerid);
-    new Float:x, Float:y, Float:z, Float:angle;
-    GetVehiclePos(vehicleid, x, y, z);
-    GetVehicleZAngle(vehicleid, angle);
-    new bool:against_traffic = false;
-    IsPointAgainstTraffic(x, y, z, angle, against_traffic);
-    return against_traffic;
-}
-
 
 #if defined _PawnPlus_included
     stock Task:FindPathAsync(MapNode:source, MapNode:target) 

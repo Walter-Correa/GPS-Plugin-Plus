@@ -1,4 +1,4 @@
-name: Build
+name: Build & Release
 
 on:
   workflow_dispatch:
@@ -7,6 +7,8 @@ on:
       - "*"
       - "*/*"
       - "**"
+    tags:
+      - "v*"
   pull_request:
     branches:
       - "*"
@@ -15,55 +17,142 @@ on:
 
 jobs:
   build-windows-release:
-    runs-on: windows-2019
+    runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           clean: true
           submodules: recursive
           fetch-depth: 0
 
-      - name: Install CMake
-        uses: lukka/get-cmake@v.3.23.2
-
-      - name: Generate and Build project
-        run: |
-          mkdir build
-          cd build
-          cmake -DCMAKE_BUILD_TYPE=Release .. -G "Visual Studio 16 2019" -A Win32
-          cmake --build . --config Release
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v3
-        with:
-          name: GPS-Plugin-Plus-win-release
-          path: build/Release/GPS.dll
-
-  build-linux-release:
-    runs-on: ubuntu-18.04
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          clean: true
-          submodules: recursive
-          fetch-depth: 0
-
-      - name: Install packages
-        run: sudo apt-get install g++-multilib
-
-      - name: Install CMake
-        uses: lukka/get-cmake@v.3.23.2
-
-      - name: Generate build files
-        run: mkdir build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS=-m32 -DCMAKE_CXX_FLAGS=-m32
+      - name: Configure CMake
+        run: cmake -B build -A Win32 -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
-        run: |
-          cd build
-          cmake --build . --config Release
+        run: cmake --build build --config Release
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+      - name: Prepare Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package/plugins
+          New-Item -ItemType Directory -Force -Path package/components
+          New-Item -ItemType Directory -Force -Path package/include
+          New-Item -ItemType Directory -Force -Path package/scriptfiles
+
+          # Copy Plugin
+          if (Test-Path "build/Release/GPS.dll") {
+            Copy-Item "build/Release/GPS.dll" "package/plugins/GPS.dll"
+          } elseif (Test-Path "build/GPS.dll") {
+            Copy-Item "build/GPS.dll" "package/plugins/GPS.dll"
+          }
+
+          # Copy Component
+          if (Test-Path "build/components/Release/GPS.dll") {
+            Copy-Item "build/components/Release/GPS.dll" "package/components/GPS.dll"
+          } elseif (Test-Path "build/components/GPS.dll") {
+            Copy-Item "build/components/GPS.dll" "package/components/GPS.dll"
+          }
+
+          # Copy Includes, Data, and Example
+          Copy-Item "GPS.inc" "package/include/GPS.inc"
+          Copy-Item "GPS.dat" "package/scriptfiles/GPS.dat"
+          Copy-Item "Example.pwn" "package/Example.pwn"
+          Copy-Item "README.md" "package/README.md"
+          Copy-Item "LICENSE" "package/LICENSE"
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: GPS-Plugin-Plus-linux-release
-          path: build/GPS.so
+          name: GPS-Plugin-Plus-Windows
+          path: package/
+
+  build-linux-release:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install 32-bit Multilib
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib g++-multilib
+
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-m32" -DCMAKE_CXX_FLAGS="-m32"
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Prepare Package
+        run: |
+          mkdir -p package/plugins package/components package/include package/scriptfiles
+
+          # Copy Plugin
+          if [ -f "build/GPS.so" ]; then
+            cp "build/GPS.so" "package/plugins/GPS.so"
+          elif [ -f "build/Release/GPS.so" ]; then
+            cp "build/Release/GPS.so" "package/plugins/GPS.so"
+          fi
+
+          # Copy Component
+          if [ -f "build/components/GPS.so" ]; then
+            cp "build/components/GPS.so" "package/components/GPS.so"
+          elif [ -f "build/components/Release/GPS.so" ]; then
+            cp "build/components/Release/GPS.so" "package/components/GPS.so"
+          fi
+
+          # Copy Includes, Data, and Example
+          cp "GPS.inc" "package/include/GPS.inc"
+          cp "GPS.dat" "package/scriptfiles/GPS.dat"
+          cp "Example.pwn" "package/Example.pwn"
+          cp "README.md" "package/README.md"
+          cp "LICENSE" "package/LICENSE"
+
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GPS-Plugin-Plus-Linux
+          path: package/
+
+  create-release:
+    needs: [build-windows-release, build-linux-release]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Windows Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: GPS-Plugin-Plus-Windows
+          path: release-win
+
+      - name: Download Linux Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: GPS-Plugin-Plus-Linux
+          path: release-linux
+
+      - name: Create Zip Archives
+        run: |
+          mkdir -p dist
+          (cd release-win && zip -r ../dist/GPS-Plugin-Plus-Windows.zip .)
+          (cd release-linux && zip -r ../dist/GPS-Plugin-Plus-Linux.zip .)
+          cp GPS.inc dist/GPS.inc
+          cp GPS.dat dist/GPS.dat
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/GPS-Plugin-Plus-Windows.zip
+            dist/GPS-Plugin-Plus-Linux.zip
+            dist/GPS.inc
+            dist/GPS.dat
+          generate_release_notes: true

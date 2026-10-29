@@ -91,3 +91,5 @@ namespace Natives
 	cell AMX_NATIVE_CALL GetPathTurnDirection(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL GetPathEstimatedTravelTime(AMX* amx, cell* params);
 }
+
+extern AMX_NATIVE_INFO PluginNatives[];

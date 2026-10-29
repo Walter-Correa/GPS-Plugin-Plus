@@ -1,14 +1,19 @@
 #pragma once
 
 #include <cstdint>
+#include <exception>
 
 #include "../lib/sdk/amx/amx.h"
 #include "../lib/sdk/amx/amx2.h"
 #include "../lib/sdk/plugincommon.h"
 
 
+#if defined(OMP_COMPONENT)
+#include <values.hpp>
+#else
 const int INVALID_NODE_ID = -1;
 const int INVALID_PATH_ID = -1;
+#endif
 const int INVALID_CONNECTION_ID = -1;
 
 

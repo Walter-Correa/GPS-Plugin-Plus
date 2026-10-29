@@ -1,248 +1,416 @@
 # GPS Plugin Plus
 
-This plugin offers a modern, high-performance way of accessing and manipulating the data of San Andreas map nodes, calculating optimal paths, and managing vehicular, pedestrian, and boat navigation. It serves as an ultra-fast, feature-complete replacement for legacy navigation plugins. The plugin uses an optimized implementation of the A* algorithm with 2D spatial indexing for sub-millisecond pathfinding across the entire map.
+[![Build & Release](https://github.com/Walter-Correa/GPS-Plugin-Plus/actions/workflows/build.yml/badge.svg)](https://github.com/Walter-Correa/GPS-Plugin-Plus/actions/workflows/build.yml)
+[![GitHub release](https://img.shields.io/github/v/release/Walter-Correa/GPS-Plugin-Plus?include_prereleases&color=blue)](https://github.com/Walter-Correa/GPS-Plugin-Plus/releases)
+[![License: MPL 2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
+[![Platform](https://img.shields.io/badge/platform-SA--MP%20%7C%20open.mp-orange.svg)](https://open.mp)
 
+**GPS Plugin Plus** is a high-performance, modern navigation and pathfinding suite for **San Andreas Multiplayer (SA-MP)** and **open.mp**. It allows pawn scripts to access and manipulate San Andreas road network nodes, compute sub-millisecond optimal paths with A*, snap vehicles to road centerlines and curbs, detect wrong-way drivers, calculate turn-by-turn maneuvers with travel time (ETA), and dynamically route around roadblocks.
 
-### Advantages over RouteConnector
+> [!NOTE]
+> This project is an actively maintained continuation and modernization of [@AmyrAhmady](https://github.com/AmyrAhmady)'s [samp-gps-plugin](https://github.com/AmyrAhmady/samp-gps-plugin) (originally created by [@kristoisberg](https://github.com/kristoisberg)). It incorporates substantial performance optimizations, architectural enhancements, full **open.mp native component** support, and advanced navigation features.
 
-* **Safer API** - Unlike RouteConnector, this plugin does not give you an array of nodes as the result of pathfinding. Instead of that, it gives you the ID of the found path that can be used later on. Each function (except `IsValidMapNode`, `IsValidPath` and `GetHighestMapNodeID`) returns an error code and the real result of them is passed by reference.
-* **Compatibility** - RouteConnector has a compatibility issue with some part of YSI that makes it call a wrong public function instead of the actual `GPS_WhenRouteIsCalculated` callback. This plugin lets you call a custom callback and pass arguments to it. In addition to that, RouteConnector uses Intel Threading Building Blocks for threading that has caused numerous compatibility (and PEBCAK) issues on Linux servers. This plugin uses `std::thread` for threading and does not have any dependencies. This plugin is also compatible with PawnPlus and supports asynchronous pathfinding out of box.
-* **Performance** - Uses a **2D Spatial Hash Grid** ($100\text{m} \times 100\text{m}$ cells) for $O(1)$ spatial queries. Instead of linearly iterating through all 69,833 nodes on every lookup, `GetClosestMapNodeToPoint` queries only local neighborhood cells, running thousands of times faster with zero server hitching.
-* **Modern Tooling & Features** - Includes dynamic roadblock rerouting (`SetMapNodeBlocked`, `SetConnectionBlocked`), orthogonal road snapping (`GetClosestPointOnRoad`, `GetRoadPositionInfo`), wrong-way driving detection (`IsPointAgainstTraffic`), turn-by-turn navigation (`GetPathTurnDirection`), ETA calculations (`GetPathEstimatedTravelTime`), and automatic layer isolation (ignoring airborne interiors and submerged water nodes on land queries).
+---
 
+## Highlights & Key Features
+
+* **Dual Target Architecture:**
+  * **Traditional SA-MP Plugin (`plugins/GPS.dll`, `plugins/GPS.so`):** Compatible with standard SA-MP 0.3.7 servers and open.mp legacy plugin loading.
+  * **Native open.mp Component (`components/GPS.dll`, `components/GPS.so`):** Built directly against the open.mp C++ Component SDK (`IComponent`, `CoreEventHandler`, `PawnEventHandler`) for maximum stability and performance.
+
+* **2D Spatial Hash Grid ($100\text{m} \times 100\text{m}$ cells):**
+  * Replaces legacy linear $O(N)$ searches over all 69,833 nodes with an $O(1)$ spatial neighborhood hash map.
+  * `GetClosestMapNodeToPoint`, `GetClosestPointOnRoad`, and `GetRoadPositionInfo` execute in sub-milliseconds without server ticks hitching.
+
+* **Orthogonal Road Snapping & Curb Offsets:**
+  * Snap arbitrary coordinates onto the closest road segment centerline (`GetClosestPointOnRoad`).
+  * Compute lateral curb and road edge positions with known road widths (`GetRoadPositionInfo`) — perfect for realistic parking, vehicle deliveries, and roadside spawns.
+
+* **Dynamic Roadblocks & Obstacle Detours:**
+  * Dynamically block/unblock nodes (`SetMapNodeBlocked`) or roadway connections (`SetConnectionBlocked`).
+  * The A* algorithm automatically navigates around active road closures, construction zones, or police checkpoints.
+
+* **Turn-by-Turn Navigation & ETA:**
+  * Calculate upcoming driving maneuvers (`TURN_STRAIGHT`, `TURN_RIGHT`, `TURN_LEFT`, `TURN_SHARP_RIGHT`, `TURN_SHARP_LEFT`, `TURN_UTURN`) and relative steering angles (`GetPathTurnDirection`).
+  * Predict travel times based on target speed in km/h (`GetPathEstimatedTravelTime`).
+
+* **Wrong-Way Traffic Detection:**
+  * Accurately detect if a vehicle is heading against the legal traffic flow (`IsPointAgainstTraffic`) on both one-way streets and multi-lane two-way roads.
+
+* **Smart Layer Isolation:**
+  * Built-in intelligent Z-filtering prevents road nodes from mistakenly picking submerged ocean floor nodes or elevated interior dimensions during random area spawns (`GetRandomMapNode`, `GetRandomMapNodeFromArea`).
+
+* **Multi-Modal Pathfinding:**
+  * Full pathfinding support for **Vehicles** (`PATH_TYPE_VEHICLE`), **Pedestrians** (`PATH_TYPE_PEDESTRIAN`), and **Boats** (`PATH_TYPE_BOAT`).
+  * Supports synchronous, threaded callback-based, and asynchronous ([PawnPlus](https://github.com/IllidanS4/PawnPlus) task) path queries.
+
+---
 
 ## Installation
 
-Simply install to your project:
+### 1. File Placement
 
-```bash
-sampctl package install Walter-Correa/GPS-Plugin-Plus
-```
+1. Place `GPS.inc` into your `pawno/include/` (or `qawno/include/`) directory.
+2. Place `GPS.dat` into your server root directory or `scriptfiles/` directory.
 
-Include in your code and begin using the library:
+### 2. Server Configuration
+
+#### For SA-MP Servers:
+Copy the binary to the `plugins/` directory and update `server.cfg`:
+* **Windows (`server.cfg`):**
+  ```cfg
+  plugins GPS.dll
+  ```
+* **Linux (`server.cfg`):**
+  ```cfg
+  plugins GPS.so
+  ```
+
+#### For open.mp Servers:
+You can choose either the **native component** (recommended) or the **legacy plugin**:
+
+* **Option A: Native Component (Recommended)**
+  Copy the binary to the `components/` directory and update `config.json`:
+  ```json
+  {
+    "components": [
+      "GPS"
+    ]
+  }
+  ```
+
+* **Option B: Legacy Plugin**
+  Copy the binary to the `plugins/` directory and update `config.json`:
+  ```json
+  {
+    "pawn": {
+      "legacy_plugins": [
+        "GPS"
+      ]
+    }
+  }
+  ```
+
+### 3. Script Inclusion
+
+Add the include file at the top of your script:
 
 ```pawn
 #include <GPS>
 ```
 
+*(Optional)* If you use [PawnPlus](https://github.com/IllidanS4/PawnPlus), include it before `GPS`:
 
-## API
+```pawn
+#include <PawnPlus>
+#include <GPS>
+```
 
+---
+
+## API Reference
+
+### Constants & Error Codes
+
+#### `GPS_ERROR`
+| Constant | Value | Description |
+| :--- | :---: | :--- |
+| `GPS_ERROR_NONE` | `0` | Operation executed successfully. |
+| `GPS_ERROR_INVALID_PARAMS` | `-1` | Invalid argument count or parameter types. |
+| `GPS_ERROR_INVALID_PATH` | `-2` | The specified path ID does not exist or pathfinding failed. |
+| `GPS_ERROR_INVALID_NODE` | `-3` | The specified node ID is invalid or no nodes exist. |
+| `GPS_ERROR_INVALID_CONNECTION` | `-4` | The specified connection ID does not exist. |
+| `GPS_ERROR_INTERNAL` | `-5` | Internal threading or memory dispatch failure. |
+
+#### `PathType`
+| Constant | Value | Description |
+| :--- | :---: | :--- |
+| `PATH_TYPE_VEHICLE` | `0` | Vehicle roadway nodes. |
+| `PATH_TYPE_PEDESTRIAN` | `1` | Pedestrian sidewalk and crossing nodes. |
+| `PATH_TYPE_BOAT` | `2` | Navigable water and ocean nodes. |
+
+#### `TurnDirection`
+| Constant | Value | Description |
+| :--- | :---: | :--- |
+| `TURN_NONE` | `0` | No turn maneuver. |
+| `TURN_STRAIGHT` | `1` | Continue forward. |
+| `TURN_RIGHT` | `2` | Normal right turn (~$45^\circ$ to $120^\circ$). |
+| `TURN_LEFT` | `3` | Normal left turn (~$-45^\circ$ to $-120^\circ$). |
+| `TURN_SHARP_RIGHT` | `4` | Sharp right turn (~$120^\circ$ to $150^\circ$). |
+| `TURN_SHARP_LEFT` | `5` | Sharp left turn (~$-120^\circ$ to $-150^\circ$). |
+| `TURN_UTURN` | `6` | U-turn ($> 150^\circ$). |
+
+#### `RoadPosition`
+| Constant | Value | Description |
+| :--- | :---: | :--- |
+| `ROAD_POS_CENTER` | `0` | Road centerline. |
+| `ROAD_POS_CURB` | `1` | Right-side curb/shoulder (`(road_width / 2.0) + 1.3m`). |
+| `ROAD_POS_EDGE` | `2` | Outer road boundary. |
+
+---
 
 ### Functions
 
-`CreateMapNode(Float:x, Float:y, Float:z, &MapNode:nodeid)`
-
-* Adds a node to the map and passes the ID of it to `nodeid`.
-
-`DestroyMapNode(MapNode:nodeid)`
-
-* If the specified map node is valid, returns `GPS_ERROR_NONE` and tries to destroy it, otherwise returns `GPS_ERROR_INVALID_NODE`. If the node is not a part of any path, it gets destroyed immediately, otherwise it will be destroyed once all paths containing it are destroyed, until that it will be excluded from pathfinding and several other features.
-
-`bool:IsValidMapNode(MapNode:nodeid)`
-
-* Returns if the map node with the specified ID is valid.
-
-`GetMapNodePos(MapNode:nodeid, &Float:x, &Float:y, &Float:z)`
-
-* If the specified map node is valid, returns `GPS_ERROR_NONE` and passes the position of it to `x`, `y` and `z`, otherwise returns `GPS_ERROR_INVALID_NODE`.
-
-`CreateConnection(MapNode:source, MapNode:target, &Connection:connectionid)`
-
-* If both specified map nodes are valid, returns `GPS_ERROR_NONE`, creates a connection from `source` to `target` and passes the ID of it to `connectionid`, otherwise returns `GPS_ERROR_INVALID_NODE`. **Note:** Connections are not double-sided may need to be added in both directions separately.
-
-`DestroyConnection(Connection:connectionid)`
-
-* If the specified connection is valid, returns `GPS_ERROR_NONE` and destroys it, otherwise returns `GPS_ERROR_INVALID_CONNECTION`.
-
-`GetConnectionSource(Connection:connectionid, &MapNode:nodeid)`
-
-* If the specified connection is valid, returns `GPS_ERROR_NONE` and passes the ID of the source node of it to `nodeid`, otherwise returns `GPS_ERROR_INVALID_CONNECTION`.
-
-`GetConnectionTarget(Connection:connectionid, &MapNode:nodeid)`
-
-* If the specified connection is valid, returns `GPS_ERROR_NONE` and passes the ID of the target node of it to `nodeid`, otherwise returns `GPS_ERROR_INVALID_CONNECTION`.
-
-`GetMapNodeConnectionCount(MapNode:nodeid, &count)`
-
-* If the specified map node is valid, returns `GPS_ERROR_NONE` and passes the amount of its connections to `count`, otherwise returns `GPS_ERROR_INVALID_NODE`. If `count` is larger than 2, the node is an intersection.
-
-`GetMapNodeConnection(MapNode:nodeid, index, &Connection:connectionid)`
-
-* If the specified map node is valid and it has a connection with the specified index, returns `GPS_ERROR_NONE` and passes the ID of the connection to `connectionid`, otherwise returns `GPS_ERROR_INVALID_NODE` or `GPS_ERROR_INVALID_CONNECTION` depending on the error.
-
-`GetConnectionBetweenMapNodes(MapNode:source, MapNode:target, &Connection:connectionid)`
-
-* If both specified map nodes are valid, tries to find a connection from `source` to `target`. If a connection is found, returns `GPS_ERROR_NONE` and passes the ID of the connection to `connectionid`, otherwise returns `GPS_ERROR_INVALID_CONNECTION`. If either of the specified map nodes is invalid, returns `GPS_ERROR_INVALID_NODE`.
-
-`GetDistanceBetweenMapNodes(MapNode:first, MapNode:second, &Float:distance)`
-
-* If both of the specified map nodes are valid, returns `GPS_ERROR_NONE` and passes the distance between them to `distance`, otherwise returns `GPS_ERROR_INVALID_NODE`.
-
-`GetAngleBetweenMapNodes(MapNode:first, MapNode:second, &Float:angle)`
-
-* If both of the specified map nodes are valid, returns `GPS_ERROR_NONE` and passes the angle between them to `angle`, otherwise returns `GPS_ERROR_INVALID_NODE`.
-
-`GetMapNodeDistanceFromPoint(MapNode:nodeid, Float:x, Float:y, Float:z, &Float:distance)`
-
-* If the specified map node is valid, returns `GPS_ERROR_NONE` and passes the distance of the map node from the specified position to `distance`, otherwise returns `GPS_ERROR_INVALID_NODE`.
-
-`GetMapNodeAngleFromPoint(MapNode:nodeid, Float:x, Float:y, &Float:angle)`
-
-* If the specified map node is valid, returns `GPS_ERROR_NONE` and passes the angle of the map node from the specified position to `angle`, otherwise returns `GPS_ERROR_INVALID_NODE`.
-
-`GetClosestMapNodeToPoint(Float:x, Float:y, Float:z, &MapNode:nodeid, MapNode:ignorednode = INVALID_MAP_NODE_ID)`
-
-* Passes the ID of the closest map node to the specified position to `nodeid`. If `ignorednode` is specified and it is the closest node to the position, it is ignored and the ID of the next closest node is passed to `nodeid` instead. Returns `GPS_ERROR_INVALID_NODE` if no nodes exist, otherwise returns `GPS_ERROR_NONE`.
-
-`GetHighestMapNodeID()`
-
-* Returns the ID of the map node with the highest ID. Could be used for iteration purposes.
-
-`GetRandomMapNode(&MapNode:nodeid, PathType:type = PATH_TYPE_VEHICLE, Float:minz = -99999.0, Float:maxz = 99999.0)`
-
-* Passes the ID of a random map node, found using uniform random selection, to `nodeid`. Automatically applies smart layer filtering by default (for vehicles and pedestrians: excludes interior nodes with $Z > 500$ and submerged ocean nodes with $Z \le 1.0$; for boats: $Z$ between $-10$ and $20$). Custom ranges can be passed via `minz` and `maxz`. Returns `GPS_ERROR_INVALID_NODE` if no map nodes exist, otherwise returns `GPS_ERROR_NONE`.
-
-`GetRandomMapNodeFromArea(Float:minx, Float:miny, Float:maxx, Float:maxy, &MapNode:nodeid, PathType:type = PATH_TYPE_VEHICLE, Float:minz = -99999.0, Float:maxz = 99999.0)`
-
-* Selects a uniform random map node bounded inside the specified 2D bounding box `(minx, miny, maxx, maxy)`. Automatically normalizes coordinate ordering and applies smart layer filtering (excludes interiors and submerged water nodes by default). Custom ranges can be specified via `minz` and `maxz`. Returns `GPS_ERROR_INVALID_NODE` if no matching nodes exist in that area.
-
-`GetClosestPointOnRoad(Float:x, Float:y, Float:z, &Float:out_x, &Float:out_y, &Float:out_z, &Float:angle, &Connection:connectionid = INVALID_CONNECTION_ID, PathType:type = PATH_TYPE_VEHICLE)`
-
-* Orthogonally projects `(x, y, z)` onto the closest road connection segment, snapping directly to the road centerline. Returns the projected coordinate, the road direction `angle` (compass facing angle), and optionally the connection ID.
-
-`GetRoadPositionInfo(Float:x, Float:y, Float:z, &Float:out_x, &Float:out_y, &Float:out_z, &Float:angle, &Float:road_width, bool:curb = false, PathType:type = PATH_TYPE_VEHICLE)`
-
-* Snaps to the closest road segment, returning position, road width, and heading angle. If `curb = true`, shifts the point laterally to the right-side curb/shoulder (`(road_width / 2.0) + 1.3m`), ideal for parking or vehicle spawning.
-
-`IsPointAgainstTraffic(Float:x, Float:y, Float:z, Float:facing_angle, &bool:against_traffic)`
-
-* Determines if a vehicle at `(x, y, z)` with facing angle `facing_angle` is driving against legal traffic flow (wrong way). Supports one-way streets and two-way roads (using lane side relative to the centerline).
-
-`SetMapNodeBlocked(MapNode:nodeid, bool:blocked)`
-
-* Dynamically blocks or unblocks a map node from pathfinding. When blocked, the A* algorithm will treat the node as impassable and route around it.
-
-`bool:IsMapNodeBlocked(MapNode:nodeid)`
-
-* Returns whether the specified map node is currently blocked.
-
-`SetConnectionBlocked(Connection:connectionid, bool:blocked)`
-
-* Dynamically blocks or unblocks a connection segment (roadway) from pathfinding. Ideal for temporary roadblocks, police blitzes, or roadwork rerouting.
-
-`bool:IsConnectionBlocked(Connection:connectionid)`
-
-* Returns whether the specified connection is currently blocked.
-
-`GetPathTurnDirection(Path:pathid, index, &TurnDirection:turn, &Float:turn_angle)`
-
-* Analyzes the heading change at node `index` along `pathid` and returns the turn maneuver (`TURN_STRAIGHT`, `TURN_RIGHT`, `TURN_LEFT`, `TURN_SHARP_RIGHT`, `TURN_SHARP_LEFT`, `TURN_UTURN`) and turning angle in degrees.
-
-`GetPathEstimatedTravelTime(Path:pathid, Float:average_speed_kmh, &Float:seconds)`
-
-* Calculates the estimated travel time (ETA) in seconds for the path based on an average speed in km/h.
-
-`SaveMapNodesToFile(const filename[])`
-
-* Saves all existing nodes and their connections to a file with the specified name.
-
-`FindPath(MapNode:source, MapNode:target, &Path:pathid)`
-
-* If both of the specified map nodes are valid, returns `GPS_ERROR_NONE` and tries to find a path from `source` to `target` and pass its ID to `pathid`, otherwise returns `GPS_ERROR_INVALID_NODE`. If pathfinding fails, returns `GPS_ERROR_INVALID_PATH`.
-
-`FindPathThreaded(MapNode:source, MapNode:target, const callback[], const format[] = "", {Float, _}:...)`
-
-* If both of the specified map nodes are valid, returns `GPS_ERROR_NONE` and tries to find a path from `source` to `target`. After pathfinding is finished, calls the specified callback and passes the path ID (could be `INVALID_GPS_PATH_ID` if pathfinding fails) and the specified arguments to it.
-
-`Task:FindPathAsync(MapNode:source, MapNode:target)`
-
-* Pauses the current function and continues it after it is finished. Throws an AMX error if pathfinding fails for any reason. Only available if PawnPlus is included before GPS. Usage explained below.
-
-`bool:IsValidPath(Path:pathid)`
-
-* Returns if the path with the specified ID is valid.
-
-`GetPathSize(Path:pathid, &size)`
-
-* If the specified path is valid, returns `GPS_ERROR_NONE` and passes the amount of nodes in it to `size`, otherwise returns `GPS_ERROR_INVALID_PATH`.
-
-`GetPathNode(Path:pathid, index, &MapNode:nodeid)`
-
-* If the specified path is valid and the index contains a node, returns `GPS_ERROR_NONE` and passes the ID of the node at that index to `nodeid`, otherwise returns `GPS_ERROR_INVALID_PATH` or `GPS_ERROR_INVALID_NODE` depending on the error.
-
-`GetPathNodeIndex(Path:pathid, MapNode:nodeid, &index)`
-
-* If the specified path is valid and the specified map node is a part of the path, returns `GPS_ERROR_NONE` and passes the index of the map node to `index`, otherwise returns `GPS_ERROR_INVALID_PATH` or `GPS_ERROR_INVALID_NODE` depending on the error.
-
-`GetPathLength(Path:pathid, &Float:length)`
-
-* If the specified path is valid, returns `GPS_ERROR_NONE` and passes the length of the path in metres to `length`, otherwise returns `GPS_ERROR_INVALID_PATH`.
-
-`DestroyPath(Path:pathid)`
-
-* If the specified path is valid, returns `GPS_ERROR_NONE` and destroys the path, otherwise returns `GPS_ERROR_INVALID_PATH`.
-
-
-### Error codes
-
-* `GPS_ERROR_NONE` - The function was executed successfully.
-* `GPS_ERROR_INVALID_PARAMS` - An invalid amount of arguments was passed to the function. Should never happen without the PAWN compiler noticing it unless the versions of the plugin and include are different.
-* `GPS_ERROR_INVALID_PATH` - An invalid path ID as passed to the function or threaded pathfinding was not successful.
-* `GPS_ERROR_INVALID_NODE` - An invalid map node ID/index was passed to the function or `GetClosestMapNodeToPoint` or `GetRandomMapNode` failed because no map nodes exist.
-* `GPS_ERROR_INVALID_CONNECTION` - An invalid connection ID/index was passed to the function.
-* `GPS_ERROR_INTERNAL` - An internal error happened - threaded pathfinding failed because dispatching a thread failed.
-
-
-## Examples
-
-
-### Threaded pathfinding
-
-Finding a path from the position of the player to the LSPD building.
+#### Map Node Management
 
 ```pawn
-CMD:pathtols(playerid) {
-    new Float:x, Float:y, Float:z, MapNode:start;
+native CreateMapNode(Float:x, Float:y, Float:z, &MapNode:nodeid, PathType:type = PATH_TYPE_VEHICLE, PathNodeFlags:flags = NODE_FLAG_NONE);
+```
+Creates a dynamic node in the map and assigns its ID to `nodeid`.
+
+```pawn
+native DestroyMapNode(MapNode:nodeid);
+```
+Destroys a map node. If part of an active path, destruction is safely deferred until the path is destroyed.
+
+```pawn
+native bool:IsValidMapNode(MapNode:nodeid);
+```
+Checks if a map node exists and is valid.
+
+```pawn
+native GetMapNodePos(MapNode:nodeid, &Float:x, &Float:y, &Float:z);
+```
+Retrieves the 3D world coordinates of a node.
+
+```pawn
+native PathType:GetMapNodeType(MapNode:nodeid);
+```
+Returns the `PathType` of the specified node.
+
+```pawn
+native GetMapNodeFlags(MapNode:nodeid, &PathNodeFlags:flags);
+```
+Retrieves the node attributes (e.g., highway, crosswalk, roadblock flags).
+
+```pawn
+native GetHighestMapNodeID();
+```
+Returns the highest allocated map node ID (useful for iteration).
+
+---
+
+#### Road Connections & Lanes
+
+```pawn
+native CreateConnection(MapNode:source, MapNode:target, &Connection:connectionid, Float:road_width = 8.0, left_lanes = 1, right_lanes = 1, bool:one_way = false);
+```
+Creates a directional road segment between `source` and `target`.
+
+```pawn
+native DestroyConnection(Connection:connectionid);
+```
+Destroys a road connection segment.
+
+```pawn
+native GetConnectionSource(Connection:connectionid, &MapNode:nodeid);
+native GetConnectionTarget(Connection:connectionid, &MapNode:nodeid);
+```
+Gets the origin or destination node ID of a connection.
+
+```pawn
+native GetMapNodeConnectionCount(MapNode:nodeid, &count);
+```
+Returns the number of connections originating from `nodeid`.
+
+```pawn
+native GetMapNodeConnection(MapNode:nodeid, index, &Connection:connectionid);
+```
+Retrieves a connection by index from a node.
+
+```pawn
+native GetConnectionBetweenMapNodes(MapNode:source, MapNode:target, &Connection:connectionid);
+```
+Finds a connection linking `source` directly to `target`.
+
+```pawn
+native GetConnectionLaneInfo(Connection:connectionid, &Float:road_width, &left_lanes, &right_lanes);
+```
+Retrieves the road width and lane distribution for a connection.
+
+```pawn
+native GetConnectionLanePos(Connection:connectionid, lane_index, &Float:x, &Float:y, &Float:z);
+```
+Calculates the center coordinate for a specific lane index along the connection.
+
+```pawn
+native bool:IsConnectionOneWay(Connection:connectionid);
+```
+Returns `true` if the connection is designated as one-way traffic.
+
+---
+
+#### Spatial Queries & Snapping
+
+```pawn
+native GetDistanceBetweenMapNodes(MapNode:first, MapNode:second, &Float:distance);
+```
+Calculates Euclidean distance in metres between two nodes.
+
+```pawn
+native GetAngleBetweenMapNodes(MapNode:first, MapNode:second, &Float:angle, bool:facing_angle = false);
+```
+Calculates the 2D angle between two nodes. If `facing_angle` is `true`, returns a standard GTA facing angle.
+
+```pawn
+native GetMapNodeDistanceFromPoint(MapNode:nodeid, Float:x, Float:y, Float:z, &Float:distance);
+```
+Returns the distance from point `(x, y, z)` to `nodeid`.
+
+```pawn
+native GetMapNodeAngleFromPoint(MapNode:nodeid, Float:x, Float:y, &Float:angle, bool:facing_angle = false);
+```
+Returns the angle from point `(x, y)` to `nodeid`.
+
+```pawn
+native GetClosestMapNodeToPoint(Float:x, Float:y, Float:z, &MapNode:nodeid, MapNode:ignorednode = GPS_INVALID_MAP_NODE_ID, PathType:type = PATH_TYPE_VEHICLE);
+native GetClosestPedMapNodeToPoint(Float:x, Float:y, Float:z, &MapNode:nodeid, MapNode:ignorednode = GPS_INVALID_MAP_NODE_ID);
+native GetClosestBoatMapNodeToPoint(Float:x, Float:y, Float:z, &MapNode:nodeid, MapNode:ignorednode = GPS_INVALID_MAP_NODE_ID);
+```
+Fast $O(1)$ spatial lookup that finds the nearest node of the requested type to a given point.
+
+```pawn
+native GetRandomMapNode(&MapNode:nodeid, PathType:type = PATH_TYPE_VEHICLE, Float:minz = -99999.0, Float:maxz = 99999.0);
+native GetRandomMapNodeFromArea(Float:minx, Float:miny, Float:maxx, Float:maxy, &MapNode:nodeid, PathType:type = PATH_TYPE_VEHICLE, Float:minz = -99999.0, Float:maxz = 99999.0);
+```
+Returns a uniform random node across the entire map or within a 2D bounding box, automatically isolating valid ground road layers by default.
+
+```pawn
+native GetClosestPointOnRoad(Float:x, Float:y, Float:z, &Float:out_x, &Float:out_y, &Float:out_z, &Float:angle, &Connection:connectionid = INVALID_CONNECTION_ID, PathType:type = PATH_TYPE_VEHICLE);
+```
+Orthogonally projects `(x, y, z)` onto the nearest road centerline, returning snapped coordinates, compass road angle, and the matching connection ID.
+
+```pawn
+native GetRoadPositionInfo(Float:x, Float:y, Float:z, &Float:out_x, &Float:out_y, &Float:out_z, &Float:angle, &Float:road_width, RoadPosition:pos = ROAD_POS_CURB, PathType:type = PATH_TYPE_VEHICLE);
+```
+Snaps to the road and computes lateral offsets (centerline, curb/shoulder, or edge) along with road width and heading.
+
+```pawn
+native IsPointAgainstTraffic(Float:x, Float:y, Float:z, Float:facing_angle, &bool:against_traffic);
+```
+Evaluates whether a vehicle facing `facing_angle` at `(x, y, z)` is traveling against the legal direction of traffic.
+
+---
+
+#### Dynamic Roadblocks & Detours
+
+```pawn
+native SetMapNodeBlocked(MapNode:nodeid, bool:blocked);
+native bool:IsMapNodeBlocked(MapNode:nodeid);
+```
+Dynamically excludes or restores a map node in pathfinding computations.
+
+```pawn
+native SetConnectionBlocked(Connection:connectionid, bool:blocked);
+native bool:IsConnectionBlocked(Connection:connectionid);
+```
+Dynamically excludes or restores a road segment in pathfinding computations.
+
+---
+
+#### Pathfinding
+
+```pawn
+native FindPath(MapNode:source, MapNode:target, &Path:pathid, PathType:type = PATH_TYPE_VEHICLE);
+native FindPedPath(MapNode:source, MapNode:target, &Path:pathid);
+native FindBoatPath(MapNode:source, MapNode:target, &Path:pathid);
+```
+Computes an optimal path synchronously from `source` to `target`.
+
+```pawn
+native FindPathThreaded(MapNode:source, MapNode:target, const callback[], const format[] = "", {Float, _}:...);
+native FindPathThreadedEx(MapNode:source, MapNode:target, PathType:type, const callback[], const format[] = "", {Float, _}:...);
+native FindPedPathThreaded(MapNode:source, MapNode:target, const callback[], const format[] = "", {Float, _}:...);
+native FindBoatPathThreaded(MapNode:source, MapNode:target, const callback[], const format[] = "", {Float, _}:...);
+```
+Calculates pathfinding on a dedicated worker thread, notifying the specified Pawn callback with `(Path:pathid, ...)` upon completion without blocking the main server tick.
+
+```pawn
+native Task:FindPathAsync(MapNode:source, MapNode:target);
+```
+Asynchronous pathfinding task for [PawnPlus](https://github.com/IllidanS4/PawnPlus) with `task_await`.
+
+---
+
+#### Path Inspection & Turn Navigation
+
+```pawn
+native bool:IsValidPath(Path:pathid);
+native GetPathSize(Path:pathid, &size);
+native GetPathLength(Path:pathid, &Float:length);
+native GetPathNode(Path:pathid, index, &MapNode:nodeid);
+native GetPathNodeIndex(Path:pathid, MapNode:nodeid, &index);
+native GetPathLaneNodePos(Path:pathid, index, lane_index, &Float:x, &Float:y, &Float:z);
+native DestroyPath(Path:pathid);
+```
+Utilities to query node count, total distance in metres, individual node coordinates, and destroy path resources.
+
+```pawn
+native GetPathTurnDirection(Path:pathid, index, &TurnDirection:turn, &Float:turn_angle);
+```
+Calculates turn-by-turn navigation maneuver (`TURN_STRAIGHT`, `TURN_RIGHT`, `TURN_LEFT`, etc.) and turn angle at node `index`.
+
+```pawn
+native GetPathEstimatedTravelTime(Path:pathid, Float:average_speed_kmh, &Float:seconds);
+```
+Calculates the estimated travel time in seconds for a path given an average speed in km/h.
+
+```pawn
+native SaveMapNodesToFile(const filename[]);
+```
+Serializes the current node and connection graph to disk.
+
+---
+
+## Usage Examples
+
+Comprehensive, production-ready examples are available in [Example.pwn](Example.pwn).
+
+### 1. Threaded Pathfinding with ETA & Turns
+
+```pawn
+CMD:navigate(playerid)
+{
+    new Float:x, Float:y, Float:z, MapNode:startNode, MapNode:targetNode;
     GetPlayerPos(playerid, x, y, z);
 
-    if (GetClosestMapNodeToPoint(x, y, z, start) != GPS_ERROR_NONE) {
-        return SendClientMessage(playerid, COLOR_RED, "Finding a node near you failed, GPS.dat was not loaded.");
-    }
+    if (GetClosestMapNodeToPoint(x, y, z, startNode) != GPS_ERROR_NONE)
+        return SendClientMessage(playerid, -1, "Error: Could not locate nearest road node.");
 
-    new MapNode:target;
+    // Target: Los Santos Airport
+    if (GetClosestMapNodeToPoint(1958.3783, -2183.1895, 13.5469, targetNode) != GPS_ERROR_NONE)
+        return SendClientMessage(playerid, -1, "Error: Could not locate destination node.");
 
-    if (GetClosestMapNodeToPoint(1258.7352, -2036.7100, 59.4561, target)) { // this is also valid since the value of GPS_ERROR_NONE is 0.
-        return SendClientMessage(playerid, COLOR_RED, "Finding a node near LSPD failed, GPS.dat was not loaded.");
-    }
-
-    if (FindPathThreaded(start, target, "OnPathToLSFound", "ii", playerid, GetTickCount())) {
-        return SendClientMessage(playerid, COLOR_RED, "Pathfinding failed for some reason, you should store this error code and print it out since there are multiple ways it could fail.");
-    }
-
-    SendClientMessage(playerid, COLOR_WHITE, "Finding the path...");
+    SendClientMessage(playerid, -1, "Calculating route in background...");
+    FindPathThreaded(startNode, targetNode, "OnRouteCalculated", "ii", playerid, GetTickCount());
     return 1;
 }
 
+forward public OnRouteCalculated(Path:pathid, playerid, startTick);
+public OnRouteCalculated(Path:pathid, playerid, startTick)
+{
+    if (!IsValidPath(pathid))
+        return SendClientMessage(playerid, -1, "Route calculation failed: No valid path found.");
 
-forward public OnPathToLSFound(Path:pathid, playerid, start_time);
-public OnPathToLSFound(Path:pathid, playerid, start_time) {
-    if (!IsValidPath(pathid)) {
-        return SendClientMessage(playerid, COLOR_RED, "Pathfinding failed!");
-    }
+    new nodes, Float:length, Float:eta;
+    GetPathSize(pathid, nodes);
+    GetPathLength(pathid, length);
+    GetPathEstimatedTravelTime(pathid, 60.0, eta); // 60 km/h average
 
-    new string[128], size, length;
-    GetPathSize(size);
-    GetPathLength(length);
+    new message[144];
+    format(message, sizeof(message), "Route ready (%d ms): %d nodes, %.1f metres, ETA: %.0f seconds.",
+        GetTickCount() - startTick, nodes, length, eta);
+    SendClientMessage(playerid, -1, message);
 
-    format(string, sizeof(string), "Found a path in %ims. Amount of nodes: %i, length: %fm.", GetTickCount() - start_time, size, length);
-
-    new MapNode:nodeid, Float:x, Float:y, Float:z;
-
-    for (new index; index < size; index++) {
-        GetPathNode(pathid, index, nodeid);
-        GetMapNodePos(nodeid, x, y, z);
-        CreateDynamicPickup(1318, 1, x, y, z);
+    // Check first navigation maneuver
+    if (nodes > 2)
+    {
+        new TurnDirection:turn, Float:angle;
+        GetPathTurnDirection(pathid, 1, turn, angle);
+        if (turn == TURN_RIGHT || turn == TURN_SHARP_RIGHT)
+            SendClientMessage(playerid, -1, "GPS: Turn right ahead.");
+        else if (turn == TURN_LEFT || turn == TURN_SHARP_LEFT)
+            SendClientMessage(playerid, -1, "GPS: Turn left ahead.");
     }
 
     DestroyPath(pathid);
@@ -250,63 +418,91 @@ public OnPathToLSFound(Path:pathid, playerid, start_time) {
 }
 ```
 
-
-### Asynchronous pathfinding
-
-What if you could continue the process within the command while still taking advantage of the benefits of threaded pathfinding? You can, using the magic of PawnPlus tasks.
+### 2. Curb-Side Vehicle Spawning
 
 ```pawn
-CMD:pathtols(playerid) {
-    new Float:x, Float:y, Float:z, MapNode:start;
-    GetPlayerPos(playerid, x, y, z);
+CMD:spawncurb(playerid)
+{
+    new Float:px, Float:py, Float:pz;
+    GetPlayerPos(playerid, px, py, pz);
 
-    if (GetClosestMapNodeToPoint(x, y, z, start)) {
-        return SendClientMessage(playerid, COLOR_RED, "Finding a node near you failed, GPS.dat was not loaded.");
+    new Float:curbX, Float:curbY, Float:curbZ, Float:heading, Float:roadWidth;
+    if (GetRoadPositionInfo(px, py, pz, curbX, curbY, curbZ, heading, roadWidth, ROAD_POS_CURB) == GPS_ERROR_NONE)
+    {
+        CreateVehicle(411, curbX, curbY, curbZ + 0.5, heading, -1, -1, 60);
+        SendClientMessage(playerid, -1, "Infernus spawned parked along the right-side curb!");
     }
-
-    new MapNode:target;
-
-    if (GetClosestMapNodeToPoint(1258.7352, -2036.7100, 59.4561, target)) { 
-        return SendClientMessage(playerid, COLOR_RED, "Finding a node near LSPD failed, GPS.dat was not loaded.");
-    }
-
-    SendClientMessage(playerid, COLOR_WHITE, "Finding the path...");
-
-    new Path:pathid = task_await(FindPathAsync(start, target)); // no error handling here, an AMX error will be thrown instead if the pathfinding fails
-
-    new string[128], size, length;
-    GetPathSize(size);
-    GetPathLength(length);
-
-    format(string, sizeof(string), "Found a path in %ims. Amount of nodes: %i, length: %fm.", GetTickCount() - start_time, size, length);
-
-    new MapNode:nodeid, Float:x, Float:y, Float:z, index;
-
-    while (!GetPathNode(pathid, index, nodeid)) // also note the alternative method of iterating through path nodes here
-        GetMapNodePos(nodeid, x, y, z);
-        CreateDynamicPickup(1318, 1, x, y, z);
-
-        index++;
-    }
-
-    DestroyPath(pathid);
     return 1;
 }
 ```
 
+### 3. Wrong-Way Traffic Enforcement
 
-## Testing
+```pawn
+public OnPlayerUpdate(playerid)
+{
+    if (GetPlayerState(playerid) == PLAYER_STATE_DRIVER)
+    {
+        new Float:x, Float:y, Float:z, Float:facingAngle;
+        GetVehiclePos(GetPlayerVehicleID(playerid), x, y, z);
+        GetVehicleZAngle(GetPlayerVehicleID(playerid), facingAngle);
 
-To test, simply run the package:
+        new bool:wrongWay;
+        if (IsPointAgainstTraffic(x, y, z, facingAngle, wrongWay) == GPS_ERROR_NONE && wrongWay)
+        {
+            GameTextForPlayer(playerid, "~r~WARNING: WRONG WAY!", 1000, 3);
+        }
+    }
+    return 1;
+}
+```
 
+---
+
+## Building from Source
+
+### Prerequisites
+* CMake 3.19 or higher
+* 32-bit C++17 compatible compiler (MSVC 2019/2022 on Windows, GCC/Clang with multilib on Linux)
+* Git submodules enabled (`git clone --recursive`)
+
+### Compiling on Windows
 ```bash
-sampctl package run
+git clone --recursive https://github.com/Walter-Correa/GPS-Plugin-Plus.git
+cd GPS-Plugin-Plus
+cmake -B build -A Win32 -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
 ```
 
+### Compiling on Linux
+```bash
+git clone --recursive https://github.com/Walter-Correa/GPS-Plugin-Plus.git
+cd GPS-Plugin-Plus
+sudo dpkg --add-architecture i386
+sudo apt-get update && sudo apt-get install -y gcc-multilib g++-multilib
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-m32" -DCMAKE_CXX_FLAGS="-m32"
+cmake --build build --config Release
+```
 
-## Credits
+The build produces:
+* **Traditional SA-MP Plugin:** `build/GPS.dll` (Windows) / `build/GPS.so` (Linux)
+* **Native open.mp Component:** `build/components/GPS.dll` (Windows) / `build/components/GPS.so` (Linux)
 
-* kristo - Creator of the plugin.
-* Gamer_Z - Creator of the original RouteConnector plugin which helped me understand the structure of GPS.dat and influenced this plugin a lot, the author of the original `GPS.dat`.
-* NaS - Author of the fixed `GPS.dat` distributed with the plugin.
-* Southclaws, IllidanS4, Hual - Helped me with the plugin in major ways (there were other helpful people as well, I appreciate it all).
+---
+
+## Credits & Acknowledgements
+
+* [@Walter-Correa](https://github.com/Walter-Correa) - Current maintainer, 2D spatial hash grid optimization, open.mp native component integration, road snapping & curb alignment, turn directions & ETA calculations, dynamic roadblocks, layer isolation, and documentation.
+* [@AmyrAhmady](https://github.com/AmyrAhmady) - Predecessor and maintainer of the [samp-gps-plugin](https://github.com/AmyrAhmady/samp-gps-plugin) fork that served as the base for this project.
+* [@kristoisberg](https://github.com/kristoisberg) - Original creator and architect of `samp-gps-plugin`.
+* [@FreddieCrew](https://github.com/FreddieCrew) - Map node and spatial algorithm contributions.
+* Gamer_Z - Original creator of the RouteConnector plugin and pioneer of map node extraction for San Andreas.
+* NaS - Author of the refined `GPS.dat` dataset.
+* [@Southclaws](https://github.com/Southclaws), [@IllidanS4](https://github.com/IllidanS4), [@Hual](https://github.com/Hual) - Invaluable architectural insights, community tooling, and PawnPlus integration.
+* [open.mp Team](https://github.com/openmultiplayer) - Creators of the open.mp multiplayer platform and Component SDK.
+
+---
+
+## License
+
+This project is licensed under the Mozilla Public License 2.0 (MPL-2.0). See the [LICENSE](LICENSE) file for details.
