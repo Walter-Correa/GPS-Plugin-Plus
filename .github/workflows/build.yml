@@ -36,7 +36,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: samp-gps-win-release
+          name: GPS-Plugin-Plus-win-release
           path: build/Release/GPS.dll
 
   build-linux-release:
@@ -65,5 +65,5 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: samp-gps-linux-release
+          name: GPS-Plugin-Plus-linux-release
           path: build/GPS.so

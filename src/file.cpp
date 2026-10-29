@@ -5,6 +5,7 @@
 #include "file.h"
 #include "container.h"
 #include "connection.h"
+#include "node.h"
 
 
 namespace File
@@ -36,7 +37,15 @@ namespace File
 			{
 				input >> x >> y >> z >> ignore >> id;
 
-				if (Container::Nodes::Add(id, x, y, z))
+				auto node_type = 0;
+				auto node_flags = 0u;
+
+				if (input >> node_type)
+				{
+					input >> node_flags;
+				}
+
+				if (Container::Nodes::Add(id, x, y, z, static_cast<PathType>(node_type), node_flags))
 				{
 					node_count++;
 				}
@@ -48,7 +57,17 @@ namespace File
 			{
 				input >> id >> id2 >> direction;
 
-				if (direction != 2 && Container::Connections::Add(id, id2))
+				auto road_width = 8.0f;
+				auto left_lanes = 1;
+				auto right_lanes = 1;
+				auto oneway = 0;
+
+				if (input >> road_width)
+				{
+					input >> left_lanes >> right_lanes >> oneway;
+				}
+
+				if (direction != 2 && Container::Connections::Add(id, id2, road_width, left_lanes, right_lanes, oneway != 0))
 				{
 					connection_count++;
 				}
@@ -80,13 +99,13 @@ namespace File
 		{
 			if (!node.second->isSetForDeletion())
 			{
-				file << 0 << " " << node.second->getX() << " " << node.second->getY() << " " << node.second->getZ() << " " << -1 << " " << node.second->getID() << '\n';
+				file << 0 << " " << node.second->getX() << " " << node.second->getY() << " " << node.second->getZ() << " " << -1 << " " << node.second->getID() << " " << static_cast<int>(node.second->getType()) << " " << node.second->getFlags() << '\n';
 			}
 		}
 
 		for (const auto connection : Container::Connections::GetAll())
 		{
-			file << 1 << " " << connection.second->getSource()->getID() << " " << connection.second->getTarget()->getID() << '\n';
+			file << 1 << " " << connection.second->getSource()->getID() << " " << connection.second->getTarget()->getID() << " " << 0 << " " << connection.second->getRoadWidth() << " " << connection.second->getLeftLanes() << " " << connection.second->getRightLanes() << " " << (connection.second->isOneWay() ? 1 : 0) << '\n';
 		}
 
 		file.close();

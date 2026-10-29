@@ -5,6 +5,7 @@
 
 #include "pathfinder.h"
 #include "connection.h"
+#include "node.h"
 #include "amx.h"
 
 
@@ -37,8 +38,13 @@ namespace Pathfinder
 	};
 
 
-	Path* FindPathInternal(Node* start, Node* target)
+	Path* FindPathInternal(Node* start, Node* target, const PathType type)
 	{
+		if (start == nullptr || target == nullptr || start->isBlocked() || target->isBlocked())
+		{
+			throw PathNotFoundException();
+		}
+
 		if (start == target || start->isSetForDeletion() || target->isSetForDeletion())
 		{
 			auto result = new Path(0.0f);
@@ -68,9 +74,19 @@ namespace Pathfinder
 
 			for (auto connection : current_node->node->getConnections())
 			{
+				if (connection->isBlocked())
+				{
+					continue;
+				}
+
 				const auto connection_target = connection->getTarget();
 
-				if (connection_target == current_node->node || connection_target->isSetForDeletion())
+				if (connection_target == current_node->node || connection_target->isSetForDeletion() || connection_target->isBlocked())
+				{
+					continue;
+				}
+
+				if (connection_target->getType() != type)
 				{
 					continue;
 				}
@@ -124,12 +140,12 @@ namespace Pathfinder
 	}
 
 
-	int FindPath(Node* start, Node* target)
+	int FindPath(Node* start, Node* target, const PathType type)
 	{
 		try
 		{
 			Container::LockShared();
-			const auto path = FindPathInternal(start, target);
+			const auto path = FindPathInternal(start, target, type);
 			Container::UnlockShared();
 
 			Container::LockExclusive();
@@ -146,12 +162,12 @@ namespace Pathfinder
 	}
 
 
-	void FindPathThreaded(Node* start, Node* target, Callback* callback)
+	void FindPathThreaded(Node* start, Node* target, Callback* callback, const PathType type)
 	{
 		try
 		{
 			Container::LockShared();
-			const auto path = FindPathInternal(start, target);
+			const auto path = FindPathInternal(start, target, type);
 			Container::UnlockShared();
 
 			Container::LockExclusive();

@@ -20,15 +20,31 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL CreateMapNode(AMX* amx, cell* params)
 	{
-		CHECK_PARAMS(4);
+		if (params[0] < (4 * 4))
+		{
+			std::cout << __func__ << ": Expecting at least 4 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		const auto x = amx_ctof(params[1]), y = amx_ctof(params[2]), z = amx_ctof(params[3]);
-		
+		auto type = PATH_TYPE_VEHICLE;
+		auto flags = NODE_FLAG_NONE;
+
+		if (params[0] >= (5 * 4))
+		{
+			type = static_cast<PathType>(params[5]);
+		}
+
+		if (params[0] >= (6 * 4))
+		{
+			flags = static_cast<PathNodeFlags>(params[6]);
+		}
+
 		Container::LockExclusive();
 
 		const auto id = Container::Nodes::AllocateID();
 
-		Container::Nodes::Add(id, x, y, z);
+		Container::Nodes::Add(id, x, y, z, type, flags);
 		Container::UnlockExclusive();
 
 		cell* address = nullptr;
@@ -98,14 +114,80 @@ namespace Natives
 	}
 
 
+	cell AMX_NATIVE_CALL GetMapNodeType(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(1);
+
+		const auto id = static_cast<int>(params[1]);
+		const auto node = Container::Nodes::Find(id);
+
+		if (node == nullptr)
+		{
+			return GPS_ERROR_INVALID_NODE;
+		}
+
+		return static_cast<cell>(node->getType());
+	}
+
+
+	cell AMX_NATIVE_CALL GetMapNodeFlags(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(2);
+
+		const auto id = static_cast<int>(params[1]);
+		const auto node = Container::Nodes::Find(id);
+
+		if (node == nullptr)
+		{
+			return GPS_ERROR_INVALID_NODE;
+		}
+
+		cell* address = nullptr;
+		amx_GetAddr(amx, params[2], &address);
+		*address = static_cast<cell>(node->getFlags());
+
+		return GPS_ERROR_NONE;
+	}
+
+
 	cell AMX_NATIVE_CALL CreateConnection(AMX* amx, cell* params)
 	{
-		CHECK_PARAMS(3);
+		if (params[0] < (3 * 4))
+		{
+			std::cout << __func__ << ": Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
-		const auto source_id = static_cast<int>(params[1]), target_id = static_cast<int>(params[2]);
+		const auto source_id = static_cast<int>(params[1]);
+		const auto target_id = static_cast<int>(params[2]);
+
+		auto road_width = 8.0f;
+		auto left_lanes = 1;
+		auto right_lanes = 1;
+		auto one_way = false;
+
+		if (params[0] >= (4 * 4))
+		{
+			road_width = amx_ctof(params[4]);
+		}
+
+		if (params[0] >= (5 * 4))
+		{
+			left_lanes = static_cast<int>(params[5]);
+		}
+
+		if (params[0] >= (6 * 4))
+		{
+			right_lanes = static_cast<int>(params[6]);
+		}
+
+		if (params[0] >= (7 * 4))
+		{
+			one_way = params[7] != 0;
+		}
 
 		Container::LockExclusive();
-		const auto id = Container::Connections::Add(source_id, target_id);
+		const auto id = Container::Connections::Add(source_id, target_id, road_width, left_lanes, right_lanes, one_way);
 		Container::UnlockExclusive();
 
 		if (id == -1)
@@ -181,29 +263,248 @@ namespace Natives
 	}
 
 
+	cell AMX_NATIVE_CALL GetConnectionLaneInfo(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(4);
+
+		const auto id = static_cast<int>(params[1]);
+		const auto connection = Container::Connections::Find(id);
+
+		if (connection == nullptr)
+		{
+			return GPS_ERROR_INVALID_CONNECTION;
+		}
+
+		cell* address = nullptr;
+
+		amx_GetAddr(amx, params[2], &address);
+		auto road_width = connection->getRoadWidth();
+		*address = amx_ftoc(road_width);
+
+		amx_GetAddr(amx, params[3], &address);
+		*address = connection->getLeftLanes();
+
+		amx_GetAddr(amx, params[4], &address);
+		*address = connection->getRightLanes();
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL GetConnectionLanePos(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(5);
+
+		const auto id = static_cast<int>(params[1]);
+		const auto connection = Container::Connections::Find(id);
+
+		if (connection == nullptr)
+		{
+			return GPS_ERROR_INVALID_CONNECTION;
+		}
+
+		const auto lane_index = static_cast<int>(params[2]);
+		float x = 0.0f, y = 0.0f, z = 0.0f;
+
+		if (!connection->getLanePosition(lane_index, x, y, z))
+		{
+			return GPS_ERROR_INTERNAL;
+		}
+
+		cell* address = nullptr;
+
+		amx_GetAddr(amx, params[3], &address);
+		*address = amx_ftoc(x);
+
+		amx_GetAddr(amx, params[4], &address);
+		*address = amx_ftoc(y);
+
+		amx_GetAddr(amx, params[5], &address);
+		*address = amx_ftoc(z);
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL IsConnectionOneWay(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(1);
+
+		const auto id = static_cast<int>(params[1]);
+		const auto connection = Container::Connections::Find(id);
+
+		if (connection == nullptr)
+		{
+			return false;
+		}
+
+		return connection->isOneWay() ? 1 : 0;
+	}
+
+
 	cell AMX_NATIVE_CALL GetHighestMapNodeID(AMX* amx, cell* params)
 	{
+		CHECK_PARAMS(0);
+
 		return Container::Nodes::GetHighestID();
 	}
 
 
 	cell AMX_NATIVE_CALL GetRandomMapNode(AMX* amx, cell* params)
 	{
-		CHECK_PARAMS(1);
-
-		auto nodes = Container::Nodes::GetAll();
-
-		if (nodes.empty())
+		if (params[0] < (1 * 4))
 		{
+			std::cout << __func__ << ": Expecting at least 1 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		auto type = PATH_TYPE_VEHICLE;
+
+		if (params[0] >= (2 * 4))
+		{
+			type = static_cast<PathType>(params[2]);
+		}
+
+		float min_z = -99999.0f;
+		float max_z = 99999.0f;
+
+		if (params[0] >= (3 * 4))
+		{
+			min_z = amx_ctof(params[3]);
+		}
+
+		if (params[0] >= (4 * 4))
+		{
+			max_z = amx_ctof(params[4]);
+		}
+
+		if (min_z <= -90000.0f && max_z >= 90000.0f)
+		{
+			if (type == PATH_TYPE_VEHICLE || type == PATH_TYPE_PEDESTRIAN)
+			{
+				min_z = 1.5f;
+				max_z = 500.0f;
+			}
+			else if (type == PATH_TYPE_BOAT)
+			{
+				min_z = -10.0f;
+				max_z = 20.0f;
+			}
+		}
+
+		std::vector<std::pair<int, Node*>> filtered_nodes;
+
+		for (const auto& node : Container::Nodes::GetAll())
+		{
+			if (node.second->isSetForDeletion() || node.second->getType() != type)
+			{
+				continue;
+			}
+
+			const float z = node.second->getZ();
+			if (z < min_z || z > max_z)
+			{
+				continue;
+			}
+
+			filtered_nodes.push_back(node);
+		}
+
+		cell* address = nullptr;
+		amx_GetAddr(amx, params[1], &address);
+
+		if (filtered_nodes.empty())
+		{
+			*address = INVALID_NODE_ID;
 			return GPS_ERROR_INVALID_NODE;
 		}
 
 		std::vector<std::pair<int, Node*>> result;
-		std::sample(nodes.begin(), nodes.end(), std::back_inserter(result), 1, mersenne);
+		std::sample(filtered_nodes.begin(), filtered_nodes.end(), std::back_inserter(result), 1, mersenne);
+
+		*address = result.at(0).second->getID();
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL GetRandomMapNodeFromArea(AMX* amx, cell* params)
+	{
+		if (params[0] < (5 * 4))
+		{
+			std::cout << __func__ << ": Expecting at least 5 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		const float min_x = std::min(amx_ctof(params[1]), amx_ctof(params[3]));
+		const float max_x = std::max(amx_ctof(params[1]), amx_ctof(params[3]));
+		const float min_y = std::min(amx_ctof(params[2]), amx_ctof(params[4]));
+		const float max_y = std::max(amx_ctof(params[2]), amx_ctof(params[4]));
+
+		auto type = PATH_TYPE_VEHICLE;
+
+		if (params[0] >= (6 * 4))
+		{
+			type = static_cast<PathType>(params[6]);
+		}
+
+		float min_z = -99999.0f;
+		float max_z = 99999.0f;
+
+		if (params[0] >= (7 * 4))
+		{
+			min_z = amx_ctof(params[7]);
+		}
+
+		if (params[0] >= (8 * 4))
+		{
+			max_z = amx_ctof(params[8]);
+		}
+
+		if (min_z <= -90000.0f && max_z >= 90000.0f)
+		{
+			if (type == PATH_TYPE_VEHICLE || type == PATH_TYPE_PEDESTRIAN)
+			{
+				min_z = 1.5f;
+				max_z = 500.0f;
+			}
+			else if (type == PATH_TYPE_BOAT)
+			{
+				min_z = -10.0f;
+				max_z = 20.0f;
+			}
+		}
+
+		std::vector<int> filtered_ids;
+
+		for (const auto& node : Container::Nodes::GetAll())
+		{
+			if (node.second->isSetForDeletion() || node.second->getType() != type)
+			{
+				continue;
+			}
+
+			const float x = node.second->getX();
+			const float y = node.second->getY();
+			const float z = node.second->getZ();
+
+			if (x >= min_x && x <= max_x && y >= min_y && y <= max_y && z >= min_z && z <= max_z)
+			{
+				filtered_ids.push_back(node.first);
+			}
+		}
 
 		cell* address = nullptr;
-		amx_GetAddr(amx, params[1], &address);
-		*address = result.at(0).second->getID();
+		amx_GetAddr(amx, params[5], &address);
+
+		if (filtered_ids.empty())
+		{
+			*address = INVALID_NODE_ID;
+			return GPS_ERROR_INVALID_NODE;
+		}
+
+		std::uniform_int_distribution<size_t> dist(0, filtered_ids.size() - 1);
+		*address = filtered_ids[dist(mersenne)];
 
 		return GPS_ERROR_NONE;
 	}
@@ -323,6 +624,42 @@ namespace Natives
 	}
 
 
+	cell AMX_NATIVE_CALL GetAngleBetweenMapNodes(AMX* amx, cell* params)
+	{
+		if (params[0] < (3 * 4))
+		{
+			std::cout << __func__ << ": Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		const auto first_id = static_cast<int>(params[1]);
+		const auto first = Container::Nodes::Find(first_id);
+
+		if (first == nullptr)
+		{
+			return GPS_ERROR_INVALID_NODE;
+		}
+
+		const auto second_id = static_cast<int>(params[2]);
+		const auto second = Container::Nodes::Find(second_id);
+
+		if (second == nullptr)
+		{
+			return GPS_ERROR_INVALID_NODE;
+		}
+
+		const bool facing_angle = (params[0] >= (4 * 4)) ? (params[4] != 0) : false;
+
+		const auto angle = first->getAngleFromNode(second, facing_angle);
+
+		cell* address = nullptr;
+		amx_GetAddr(amx, params[3], &address);
+		*address = amx_ftoc(angle);
+
+		return GPS_ERROR_NONE;
+	}
+
+
 	cell AMX_NATIVE_CALL GetMapNodeDistanceFromPoint(AMX* amx, cell* params)
 	{
 		CHECK_PARAMS(5);
@@ -347,39 +684,13 @@ namespace Natives
 	}
 
 
-	cell AMX_NATIVE_CALL GetAngleBetweenMapNodes(AMX* amx, cell* params)
-	{
-		CHECK_PARAMS(3);
-
-		const auto first_id = static_cast<int>(params[1]);
-		const auto first = Container::Nodes::Find(first_id);
-
-		if (first == nullptr)
-		{
-			return GPS_ERROR_INVALID_NODE;
-		}
-
-		const auto second_id = static_cast<int>(params[2]);
-		const auto second = Container::Nodes::Find(second_id);
-
-		if (second == nullptr)
-		{
-			return GPS_ERROR_INVALID_NODE;
-		}
-
-		auto angle = first->getAngleFromNode(second);
-
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[3], &address);
-		*address = amx_ftoc(angle);
-
-		return GPS_ERROR_NONE;
-	}
-
-
 	cell AMX_NATIVE_CALL GetMapNodeAngleFromPoint(AMX* amx, cell* params)
 	{
-		CHECK_PARAMS(4);
+		if (params[0] < (4 * 4))
+		{
+			std::cout << __func__ << ": Expecting at least 4 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		const auto id = static_cast<int>(params[1]);
 		const auto node = Container::Nodes::Find(id);
@@ -390,8 +701,9 @@ namespace Natives
 		}
 
 		const auto x = amx_ctof(params[2]), y = amx_ctof(params[3]);
+		const bool facing_angle = (params[0] >= (5 * 4)) ? (params[5] != 0) : false;
 
-		auto angle = node->getAngleFromPoint(x, y);
+		const auto angle = node->getAngleFromPoint(x, y, facing_angle);
 
 		cell* address = nullptr;
 		amx_GetAddr(amx, params[4], &address);
@@ -401,43 +713,68 @@ namespace Natives
 	}
 
 
-	cell AMX_NATIVE_CALL GetClosestMapNodeToPoint(AMX* amx, cell* params)
+	static cell FindClosestNodeInternal(AMX* amx, cell* params, PathType default_type)
 	{
-		CHECK_PARAMS(5);
-
 		const auto x = amx_ctof(params[1]), y = amx_ctof(params[2]), z = amx_ctof(params[3]);
-		const auto ignored = static_cast<int>(params[5]);
-		auto result = INVALID_NODE_ID, id = INVALID_NODE_ID;
-		auto distance = std::numeric_limits<float>::infinity(), temp = 0.0f;
+		auto ignored = INVALID_NODE_ID;
+		auto type = default_type;
 
-		for (const auto node : Container::Nodes::GetAll())
+		if (params[0] >= (5 * 4))
 		{
-			if (node.second->isSetForDeletion())
-			{
-				continue;
-			}
-
-			id = node.second->getID();
-
-			if (ignored == id)
-			{
-				continue;
-			}
-
-			temp = node.second->getDistanceFromPoint(x, y, z);
-
-			if (temp < distance)
-			{
-				result = id;
-				distance = temp;
-			}
+			ignored = static_cast<int>(params[5]);
 		}
+
+		if (params[0] >= (6 * 4))
+		{
+			type = static_cast<PathType>(params[6]);
+		}
+
+		Container::LockShared();
+		const auto node = Container::Nodes::FindClosest(x, y, z, type, ignored);
+		const auto result = (node != nullptr) ? node->getID() : INVALID_NODE_ID;
+		Container::UnlockShared();
 
 		cell* address = nullptr;
 		amx_GetAddr(amx, params[4], &address);
 		*address = result;
 
 		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL GetClosestMapNodeToPoint(AMX* amx, cell* params)
+	{
+		if (params[0] < (4 * 4))
+		{
+			std::cout << __func__ << ": Expecting at least 4 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		return FindClosestNodeInternal(amx, params, PATH_TYPE_VEHICLE);
+	}
+
+
+	cell AMX_NATIVE_CALL GetClosestPedMapNodeToPoint(AMX* amx, cell* params)
+	{
+		if (params[0] < (4 * 4))
+		{
+			std::cout << __func__ << ": Expecting at least 4 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		return FindClosestNodeInternal(amx, params, PATH_TYPE_PEDESTRIAN);
+	}
+
+
+	cell AMX_NATIVE_CALL GetClosestBoatMapNodeToPoint(AMX* amx, cell* params)
+	{
+		if (params[0] < (4 * 4))
+		{
+			std::cout << __func__ << ": Expecting at least 4 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		return FindClosestNodeInternal(amx, params, PATH_TYPE_BOAT);
 	}
 
 
@@ -456,10 +793,8 @@ namespace Natives
 	}
 
 
-	cell AMX_NATIVE_CALL FindPath(AMX* amx, cell* params)
+	static cell FindPathInternalWrapper(AMX* amx, cell* params, PathType default_type)
 	{
-		CHECK_PARAMS(3);
-
 		const auto start_id = static_cast<int>(params[1]);
 		const auto start = Container::Nodes::Find(start_id);
 
@@ -476,7 +811,14 @@ namespace Natives
 			return GPS_ERROR_INVALID_NODE;
 		}
 
-		const auto result = Pathfinder::FindPath(start, target);
+		auto type = default_type;
+
+		if (params[0] >= (4 * 4))
+		{
+			type = static_cast<PathType>(params[4]);
+		}
+
+		const auto result = Pathfinder::FindPath(start, target, type);
 
 		if (result == -1)
 		{
@@ -491,14 +833,36 @@ namespace Natives
 	}
 
 
-	cell AMX_NATIVE_CALL FindPathThreaded(AMX* amx, cell* params)
+	cell AMX_NATIVE_CALL FindPath(AMX* amx, cell* params)
 	{
 		if (params[0] < (3 * 4))
 		{
-			std::cout << "FindPathThreaded: Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			std::cout << __func__ << ": Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
 			return GPS_ERROR_INVALID_PARAMS;
 		}
 
+		return FindPathInternalWrapper(amx, params, PATH_TYPE_VEHICLE);
+	}
+
+
+	cell AMX_NATIVE_CALL FindPedPath(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(3);
+
+		return FindPathInternalWrapper(amx, params, PATH_TYPE_PEDESTRIAN);
+	}
+
+
+	cell AMX_NATIVE_CALL FindBoatPath(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(3);
+
+		return FindPathInternalWrapper(amx, params, PATH_TYPE_BOAT);
+	}
+
+
+	static cell FindPathThreadedInternal(AMX* amx, cell* params, PathType type, int format_param_index)
+	{
 		const auto start_id = static_cast<int>(params[1]);
 		auto start = Container::Nodes::Find(start_id);
 
@@ -515,16 +879,19 @@ namespace Natives
 			return GPS_ERROR_INVALID_NODE;
 		}
 
-		const auto callback_name = amx_GetCppString(amx, params[3]);
+		const auto callback_name = amx_GetCppString(amx, params[format_param_index - 1]);
 
 		char* format = nullptr;
-		amx_StrParam(amx, params[4], format);
+		if (params[0] >= (format_param_index * sizeof(cell)))
+		{
+			amx_StrParam(amx, params[format_param_index], format);
+		}
 
-		auto callback = new Callback(AmxHandler::GetAmx(amx), callback_name, format, params, 4);
+		auto callback = new Callback(AmxHandler::GetAmx(amx), callback_name, format, params, format_param_index);
 
 		try
 		{
-			std::thread t(Pathfinder::FindPathThreaded, start, target, callback);
+			std::thread t(Pathfinder::FindPathThreaded, start, target, callback, type);
 			t.detach();
 		}
 		catch (std::exception &e)
@@ -534,6 +901,56 @@ namespace Natives
 		}
 
 		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL FindPathThreaded(AMX* amx, cell* params)
+	{
+		if (params[0] < (3 * 4))
+		{
+			std::cout << "FindPathThreaded: Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		return FindPathThreadedInternal(amx, params, PATH_TYPE_VEHICLE, 4);
+	}
+
+
+	cell AMX_NATIVE_CALL FindPathThreadedEx(AMX* amx, cell* params)
+	{
+		if (params[0] < (4 * 4))
+		{
+			std::cout << "FindPathThreadedEx: Expecting at least 4 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		const auto type = static_cast<PathType>(params[3]);
+
+		return FindPathThreadedInternal(amx, params, type, 5);
+	}
+
+
+	cell AMX_NATIVE_CALL FindPedPathThreaded(AMX* amx, cell* params)
+	{
+		if (params[0] < (3 * 4))
+		{
+			std::cout << "FindPedPathThreaded: Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		return FindPathThreadedInternal(amx, params, PATH_TYPE_PEDESTRIAN, 4);
+	}
+
+
+	cell AMX_NATIVE_CALL FindBoatPathThreaded(AMX* amx, cell* params)
+	{
+		if (params[0] < (3 * 4))
+		{
+			std::cout << "FindBoatPathThreaded: Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		return FindPathThreadedInternal(amx, params, PATH_TYPE_BOAT, 4);
 	}
 
 
@@ -617,7 +1034,7 @@ namespace Natives
 		const auto index = static_cast<unsigned int>(params[2]);
 		auto nodes = path->getNodes();
 
-		if (index < 0 || index >= nodes.size())
+		if (index >= nodes.size())
 		{
 			return GPS_ERROR_INVALID_NODE;
 		}
@@ -668,6 +1085,80 @@ namespace Natives
 	}
 
 
+	cell AMX_NATIVE_CALL GetPathLaneNodePos(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(6);
+
+		const auto id = static_cast<int>(params[1]);
+
+		Container::LockShared();
+		const auto path = Container::Paths::Find(id);
+		Container::UnlockShared();
+
+		if (path == nullptr)
+		{
+			return GPS_ERROR_INVALID_PATH;
+		}
+
+		const auto index = static_cast<unsigned int>(params[2]);
+		const auto lane_index = static_cast<int>(params[3]);
+		const auto nodes = path->getNodes();
+
+		if (index >= nodes.size())
+		{
+			return GPS_ERROR_INVALID_NODE;
+		}
+
+		auto current_node = nodes.at(index);
+		Connection* connection = nullptr;
+
+		if (index + 1 < nodes.size())
+		{
+			auto next_node = nodes.at(index + 1);
+			for (auto conn : current_node->getConnections())
+			{
+				if (conn->getTarget() == next_node)
+				{
+					connection = conn;
+					break;
+				}
+			}
+		}
+		else if (index > 0)
+		{
+			auto prev_node = nodes.at(index - 1);
+			for (auto conn : prev_node->getConnections())
+			{
+				if (conn->getTarget() == current_node)
+				{
+					connection = conn;
+					break;
+				}
+			}
+		}
+
+		float x = current_node->getX(), y = current_node->getY(), z = current_node->getZ();
+
+		if (connection != nullptr)
+		{
+			connection->getLanePosition(lane_index, x, y, z);
+		}
+
+		cell* address = nullptr;
+
+		amx_GetAddr(amx, params[4], &address);
+		*address = amx_ftoc(x);
+
+		amx_GetAddr(amx, params[5], &address);
+		*address = amx_ftoc(y);
+
+		amx_GetAddr(amx, params[6], &address);
+		*address = amx_ftoc(z);
+
+		return GPS_ERROR_NONE;
+	}
+
+
 	cell AMX_NATIVE_CALL DestroyPath(AMX* amx, cell* params)
 	{
 		CHECK_PARAMS(1);
@@ -686,6 +1177,383 @@ namespace Natives
 		Container::LockExclusive();
 		Container::Paths::Delete(path);
 		Container::UnlockExclusive();
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL SetMapNodeBlocked(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(2);
+
+		const auto id = static_cast<int>(params[1]);
+		const auto blocked = params[2] != 0;
+
+		Container::LockShared();
+		const auto node = Container::Nodes::Find(id);
+
+		if (node == nullptr)
+		{
+			Container::UnlockShared();
+			return GPS_ERROR_INVALID_NODE;
+		}
+
+		node->setBlocked(blocked);
+		Container::UnlockShared();
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL IsMapNodeBlocked(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(1);
+
+		const auto id = static_cast<int>(params[1]);
+
+		Container::LockShared();
+		const auto node = Container::Nodes::Find(id);
+
+		if (node == nullptr)
+		{
+			Container::UnlockShared();
+			return 0;
+		}
+
+		const auto blocked = node->isBlocked();
+		Container::UnlockShared();
+
+		return blocked ? 1 : 0;
+	}
+
+
+	cell AMX_NATIVE_CALL SetConnectionBlocked(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(2);
+
+		const auto id = static_cast<int>(params[1]);
+		const auto blocked = params[2] != 0;
+
+		Container::LockShared();
+		const auto connection = Container::Connections::Find(id);
+
+		if (connection == nullptr)
+		{
+			Container::UnlockShared();
+			return GPS_ERROR_INVALID_CONNECTION;
+		}
+
+		connection->setBlocked(blocked);
+		Container::UnlockShared();
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL IsConnectionBlocked(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(1);
+
+		const auto id = static_cast<int>(params[1]);
+
+		Container::LockShared();
+		const auto connection = Container::Connections::Find(id);
+
+		if (connection == nullptr)
+		{
+			Container::UnlockShared();
+			return 0;
+		}
+
+		const auto blocked = connection->isBlocked();
+		Container::UnlockShared();
+
+		return blocked ? 1 : 0;
+	}
+
+
+	cell AMX_NATIVE_CALL GetClosestPointOnRoad(AMX* amx, cell* params)
+	{
+		if (params[0] < (7 * 4))
+		{
+			std::cout << __func__ << ": Expecting at least 7 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		const auto x = amx_ctof(params[1]), y = amx_ctof(params[2]), z = amx_ctof(params[3]);
+		auto type = PATH_TYPE_VEHICLE;
+
+		if (params[0] >= (9 * 4))
+		{
+			type = static_cast<PathType>(params[9]);
+		}
+
+		float out_x = 0.0f, out_y = 0.0f, out_z = 0.0f, out_angle = 0.0f, out_road_width = 8.0f;
+		int out_conn_id = INVALID_CONNECTION_ID;
+
+		Container::LockShared();
+		const auto success = Container::Connections::FindClosestRoadPoint(x, y, z, out_x, out_y, out_z, out_angle, out_road_width, out_conn_id, type);
+		Container::UnlockShared();
+
+		if (!success)
+		{
+			return GPS_ERROR_INVALID_NODE;
+		}
+
+		cell* address = nullptr;
+		amx_GetAddr(amx, params[4], &address);
+		*address = amx_ftoc(out_x);
+
+		amx_GetAddr(amx, params[5], &address);
+		*address = amx_ftoc(out_y);
+
+		amx_GetAddr(amx, params[6], &address);
+		*address = amx_ftoc(out_z);
+
+		amx_GetAddr(amx, params[7], &address);
+		*address = amx_ftoc(out_angle);
+
+		if (params[0] >= (8 * 4))
+		{
+			amx_GetAddr(amx, params[8], &address);
+			*address = out_conn_id;
+		}
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL GetRoadPositionInfo(AMX* amx, cell* params)
+	{
+		if (params[0] < (8 * 4))
+		{
+			std::cout << __func__ << ": Expecting at least 8 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		const auto x = amx_ctof(params[1]), y = amx_ctof(params[2]), z = amx_ctof(params[3]);
+		int curb = 0;
+		auto type = PATH_TYPE_VEHICLE;
+
+		if (params[0] >= (9 * 4))
+		{
+			curb = static_cast<int>(params[9]);
+		}
+
+		if (params[0] >= (10 * 4))
+		{
+			type = static_cast<PathType>(params[10]);
+		}
+
+		float out_x = 0.0f, out_y = 0.0f, out_z = 0.0f, out_angle = 0.0f, out_road_width = 8.0f;
+		int out_conn_id = INVALID_CONNECTION_ID;
+
+		Container::LockShared();
+		const auto success = Container::Connections::FindClosestRoadPoint(x, y, z, out_x, out_y, out_z, out_angle, out_road_width, out_conn_id, type);
+		Container::UnlockShared();
+
+		if (!success)
+		{
+			return GPS_ERROR_INVALID_NODE;
+		}
+
+		if (curb != 0)
+		{
+			const float lateral_angle = (out_angle - 90.0f) * 3.14159265358979323846f / 180.0f;
+			const float offset = (curb == 2) ? (out_road_width / 2.0f) : ((out_road_width / 2.0f) + 1.3f);
+			out_x += offset * std::sin(-lateral_angle);
+			out_y += offset * std::cos(-lateral_angle);
+		}
+
+		cell* address = nullptr;
+		amx_GetAddr(amx, params[4], &address);
+		*address = amx_ftoc(out_x);
+
+		amx_GetAddr(amx, params[5], &address);
+		*address = amx_ftoc(out_y);
+
+		amx_GetAddr(amx, params[6], &address);
+		*address = amx_ftoc(out_z);
+
+		amx_GetAddr(amx, params[7], &address);
+		*address = amx_ftoc(out_angle);
+
+		amx_GetAddr(amx, params[8], &address);
+		*address = amx_ftoc(out_road_width);
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL IsPointAgainstTraffic(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(5);
+
+		const auto x = amx_ctof(params[1]), y = amx_ctof(params[2]), z = amx_ctof(params[3]);
+		const auto facing_angle = amx_ctof(params[4]);
+
+		float out_x = 0.0f, out_y = 0.0f, out_z = 0.0f, out_angle = 0.0f, out_road_width = 8.0f;
+		int out_conn_id = INVALID_CONNECTION_ID;
+
+		Container::LockShared();
+		const auto success = Container::Connections::FindClosestRoadPoint(x, y, z, out_x, out_y, out_z, out_angle, out_road_width, out_conn_id, PATH_TYPE_VEHICLE);
+
+		if (!success)
+		{
+			Container::UnlockShared();
+			return GPS_ERROR_INVALID_CONNECTION;
+		}
+
+		const auto conn = Container::Connections::Find(out_conn_id);
+		if (conn == nullptr || conn->getSource() == nullptr || conn->getTarget() == nullptr)
+		{
+			Container::UnlockShared();
+			return GPS_ERROR_INVALID_CONNECTION;
+		}
+
+		const auto src = conn->getSource();
+		const auto tgt = conn->getTarget();
+
+		const float forward_angle = src->getAngleFromNode(tgt, true);
+
+		auto get_angle_delta = [](float a, float b)
+		{
+			float diff = std::abs(a - b);
+			while (diff > 180.0f) diff = std::abs(diff - 360.0f);
+			return diff;
+		};
+
+		bool wrong_way = false;
+
+		if (conn->isOneWay())
+		{
+			wrong_way = (get_angle_delta(facing_angle, forward_angle) > 90.0f);
+		}
+		else
+		{
+			const float cross = (tgt->getX() - src->getX()) * (y - src->getY()) - (tgt->getY() - src->getY()) * (x - src->getX());
+			if (cross <= 0.0f)
+			{
+				wrong_way = (get_angle_delta(facing_angle, forward_angle) > 90.0f);
+			}
+			else
+			{
+				float reverse_angle = forward_angle + 180.0f;
+				if (reverse_angle >= 360.0f) reverse_angle -= 360.0f;
+				wrong_way = (get_angle_delta(facing_angle, reverse_angle) > 90.0f);
+			}
+		}
+
+		Container::UnlockShared();
+
+		cell* address = nullptr;
+		amx_GetAddr(amx, params[5], &address);
+		*address = wrong_way ? 1 : 0;
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL GetPathTurnDirection(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(4);
+
+		const auto id = static_cast<int>(params[1]);
+		const auto path = Container::Paths::Find(id);
+
+		if (path == nullptr)
+		{
+			return GPS_ERROR_INVALID_PATH;
+		}
+
+		const auto index = static_cast<int>(params[2]);
+		const auto nodes = path->getNodes();
+		const auto count = static_cast<int>(nodes.size());
+
+		TurnDirection turn = TURN_NONE;
+		float turn_angle = 0.0f;
+
+		if (index > 0 && index < (count - 1))
+		{
+			const auto prev = nodes[index - 1];
+			const auto curr = nodes[index];
+			const auto next = nodes[index + 1];
+
+			if (prev != nullptr && curr != nullptr && next != nullptr)
+			{
+				const float angle1 = prev->getAngleFromNode(curr, true);
+				const float angle2 = curr->getAngleFromNode(next, true);
+
+				float diff = angle2 - angle1;
+				while (diff > 180.0f) diff -= 360.0f;
+				while (diff <= -180.0f) diff += 360.0f;
+
+				// In SA-MP compass facing angle, diff < 0 is turning right, diff > 0 is turning left
+				turn_angle = -diff;
+
+				const float abs_angle = std::abs(turn_angle);
+				if (abs_angle >= 160.0f)
+				{
+					turn = TURN_UTURN;
+				}
+				else if (turn_angle > 120.0f)
+				{
+					turn = TURN_SHARP_RIGHT;
+				}
+				else if (turn_angle > 20.0f)
+				{
+					turn = TURN_RIGHT;
+				}
+				else if (turn_angle < -120.0f)
+				{
+					turn = TURN_SHARP_LEFT;
+				}
+				else if (turn_angle < -20.0f)
+				{
+					turn = TURN_LEFT;
+				}
+				else
+				{
+					turn = TURN_STRAIGHT;
+				}
+			}
+		}
+
+		cell* address = nullptr;
+		amx_GetAddr(amx, params[3], &address);
+		*address = static_cast<cell>(turn);
+
+		amx_GetAddr(amx, params[4], &address);
+		*address = amx_ftoc(turn_angle);
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL GetPathEstimatedTravelTime(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(3);
+
+		const auto id = static_cast<int>(params[1]);
+		const auto path = Container::Paths::Find(id);
+
+		if (path == nullptr)
+		{
+			return GPS_ERROR_INVALID_PATH;
+		}
+
+		const auto speed_kmh = amx_ctof(params[2]);
+		if (speed_kmh <= 0.1f)
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		const auto speed_ms = speed_kmh / 3.6f;
+		const auto seconds = path->getLength() / speed_ms;
+
+		cell* address = nullptr;
+		amx_GetAddr(amx, params[3], &address);
+		*address = amx_ftoc(seconds);
 
 		return GPS_ERROR_NONE;
 	}

@@ -52,6 +52,9 @@ AMX_NATIVE_INFO PluginNatives[] =
 	{"IsValidMapNode", 					Natives::IsValidMapNode},
 	{"GetMapNodePos",					Natives::GetMapNodePos},
 
+	{"GetMapNodeType",					Natives::GetMapNodeType},
+	{"GetMapNodeFlags",					Natives::GetMapNodeFlags},
+
 	{"CreateConnection",				Natives::CreateConnection},
 	{"DestroyConnection",				Natives::DestroyConnection},
 	{"GetConnectionSource", 			Natives::GetConnectionSource},
@@ -61,17 +64,33 @@ AMX_NATIVE_INFO PluginNatives[] =
 	{"GetMapNodeConnection",			Natives::GetMapNodeConnection},
 	{"GetConnectionBetweenMapNodes",	Natives::GetConnectionBetweenMapNodes},
 
+	{"GetConnectionLaneInfo",			Natives::GetConnectionLaneInfo},
+	{"GetConnectionLanePos",			Natives::GetConnectionLanePos},
+	{"IsConnectionOneWay",				Natives::IsConnectionOneWay},
+
 	{"GetDistanceBetweenMapNodes",		Natives::GetDistanceBetweenMapNodes},
 	{"GetAngleBetweenMapNodes",			Natives::GetAngleBetweenMapNodes},
 	{"GetMapNodeDistanceFromPoint",		Natives::GetMapNodeDistanceFromPoint},
 	{"GetMapNodeAngleFromPoint",		Natives::GetMapNodeAngleFromPoint},
 	{"GetClosestMapNodeToPoint",		Natives::GetClosestMapNodeToPoint},
-	
+
+	{"GetClosestPedMapNodeToPoint",		Natives::GetClosestPedMapNodeToPoint},
+	{"GetClosestBoatMapNodeToPoint",	Natives::GetClosestBoatMapNodeToPoint},
+
 	{"GetHighestMapNodeID",				Natives::GetHighestMapNodeID},
 	{"GetRandomMapNode",				Natives::GetRandomMapNode},
+	{"GetRandomMapNodeFromArea",		Natives::GetRandomMapNodeFromArea},
+	{"GetRandomMapNodeInArea",			Natives::GetRandomMapNodeFromArea},
 
 	{"FindPath",						Natives::FindPath},
 	{"FindPathThreaded",				Natives::FindPathThreaded},
+	{"FindPathThreadedEx",				Natives::FindPathThreadedEx},
+
+	{"FindPedPath",						Natives::FindPedPath},
+	{"FindPedPathThreaded",				Natives::FindPedPathThreaded},
+
+	{"FindBoatPath",					Natives::FindBoatPath},
+	{"FindBoatPathThreaded",			Natives::FindBoatPathThreaded},
 
 	{"SaveMapNodesToFile",				Natives::SaveMapNodesToFile},
 
@@ -80,7 +99,20 @@ AMX_NATIVE_INFO PluginNatives[] =
 	{"GetPathLength",					Natives::GetPathLength},
 	{"GetPathNode",						Natives::GetPathNode},
 	{"GetPathNodeIndex",				Natives::GetPathNodeIndex},
+	{"GetPathLaneNodePos",				Natives::GetPathLaneNodePos},
 	{"DestroyPath",						Natives::DestroyPath},
+
+	{"SetMapNodeBlocked",				Natives::SetMapNodeBlocked},
+	{"IsMapNodeBlocked",				Natives::IsMapNodeBlocked},
+	{"SetConnectionBlocked",			Natives::SetConnectionBlocked},
+	{"IsConnectionBlocked",				Natives::IsConnectionBlocked},
+
+	{"GetClosestPointOnRoad",			Natives::GetClosestPointOnRoad},
+	{"GetRoadPositionInfo",				Natives::GetRoadPositionInfo},
+	{"IsPointAgainstTraffic",			Natives::IsPointAgainstTraffic},
+
+	{"GetPathTurnDirection",			Natives::GetPathTurnDirection},
+	{"GetPathEstimatedTravelTime",		Natives::GetPathEstimatedTravelTime},
 
 	{0, 0}
 };

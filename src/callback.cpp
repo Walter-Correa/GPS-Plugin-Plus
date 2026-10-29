@@ -10,7 +10,7 @@ Callback::Callback(Amx* amx, const std::string& function, const char* format, ce
 	function_ = function;
 	result_ = 0;
 
-	if (format != nullptr)
+	if (format != nullptr && *format != '\0')
 	{
 		const auto internal_amx = amx->getInternalAmx();
 		cell* address = nullptr;

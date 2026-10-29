@@ -4,14 +4,18 @@
 #include <algorithm>
 
 
-Node::Node(const int id, const float x, const float y, const float z)
+Node::Node(const int id, const float x, const float y, const float z, const PathType type, const uint32_t flags)
 {
 	id_ = id;
 	is_set_for_deletion_ = false;
+	blocked_ = false;
 
 	x_ = x;
 	y_ = y;
 	z_ = z;
+
+	type_ = type;
+	flags_ = flags;
 }
 
 
@@ -116,6 +120,30 @@ float Node::getZ() const
 }
 
 
+PathType Node::getType() const
+{
+	return type_;
+}
+
+
+void Node::setType(const PathType type)
+{
+	type_ = type;
+}
+
+
+uint32_t Node::getFlags() const
+{
+	return flags_;
+}
+
+
+void Node::setFlags(const uint32_t flags)
+{
+	flags_ = flags;
+}
+
+
 float Node::getDistanceFromPoint(const float pointX, const float pointY, const float pointZ) const
 {
 	return sqrt(pow(pointX - x_, 2.0f) + pow(pointY - y_, 2.0f) + pow(pointZ - z_, 2.0f));
@@ -128,13 +156,39 @@ float Node::getDistanceFromNode(Node* other) const
 }
 
 
-float Node::getAngleFromPoint(const float pointX, const float pointY) const
+float Node::getAngleFromPoint(const float pointX, const float pointY, const bool facing_angle) const
 {
+	if (facing_angle)
+	{
+		float angle = atan2(x_ - pointX, pointY - y_) * 180.0f / 3.14159265358979323846f;
+		if (angle < 0.0f)
+		{
+			angle += 360.0f;
+		}
+		if (angle >= 360.0f)
+		{
+			angle -= 360.0f;
+		}
+		return angle;
+	}
+
 	return atan2(pointY - y_, pointX - x_) * 180.0f / 3.14159265f;
 }
 
 
-float Node::getAngleFromNode(Node* other) const
+float Node::getAngleFromNode(Node* other, const bool facing_angle) const
 {
-	return getAngleFromPoint(other->getX(), other->getY());
+	return getAngleFromPoint(other->getX(), other->getY(), facing_angle);
+}
+
+
+bool Node::isBlocked() const
+{
+	return blocked_;
+}
+
+
+void Node::setBlocked(const bool blocked)
+{
+	blocked_ = blocked;
 }
