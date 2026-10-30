@@ -434,6 +434,59 @@ namespace Container
 		{
 			return highest_connection_id;
 		}
+
+		void SetTrafficMultiplier(const int id, const float multiplier)
+		{
+			auto conn = Find(id);
+			if (conn != nullptr)
+			{
+				conn->setTrafficMultiplier(multiplier);
+			}
+		}
+
+		float GetTrafficMultiplier(const int id)
+		{
+			auto conn = Find(id);
+			if (conn != nullptr)
+			{
+				return conn->getTrafficMultiplier();
+			}
+			return 1.0f;
+		}
+
+		void SetAreaTrafficMultiplier(const float minx, const float miny, const float maxx, const float maxy, const float multiplier)
+		{
+			const float x1 = std::min(minx, maxx);
+			const float x2 = std::max(minx, maxx);
+			const float y1 = std::min(miny, maxy);
+			const float y2 = std::max(miny, maxy);
+
+			for (auto& pair : connections)
+			{
+				auto conn = pair.second;
+				if (conn == nullptr) continue;
+				auto src = conn->getSource();
+				auto tgt = conn->getTarget();
+				if (src == nullptr || tgt == nullptr) continue;
+				const float mx = (src->getX() + tgt->getX()) * 0.5f;
+				const float my = (src->getY() + tgt->getY()) * 0.5f;
+				if (mx >= x1 && mx <= x2 && my >= y1 && my <= y2)
+				{
+					conn->setTrafficMultiplier(multiplier);
+				}
+			}
+		}
+
+		void ResetTrafficMultipliers()
+		{
+			for (auto& pair : connections)
+			{
+				if (pair.second != nullptr)
+				{
+					pair.second->setTrafficMultiplier(1.0f);
+				}
+			}
+		}
 	}
 
 
@@ -486,6 +539,23 @@ namespace Container
 		int GetHighestID()
 		{
 			return highest_path_id;
+		}
+
+		void ProcessTick()
+		{
+			std::vector<Path*> expired_paths;
+			for (auto& pair : paths)
+			{
+				if (pair.second != nullptr && pair.second->isExpired())
+				{
+					expired_paths.push_back(pair.second);
+				}
+			}
+
+			for (auto path : expired_paths)
+			{
+				Delete(path);
+			}
 		}
 	}
 }

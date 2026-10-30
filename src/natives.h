@@ -90,6 +90,30 @@ namespace Natives
 	cell AMX_NATIVE_CALL GetSimplifiedPathNodes(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL IsMapNodeIntersection(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL GetMapNodeConnectionTarget(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL SetConnectionTrafficMultiplier(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetConnectionTrafficMultiplier(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL SetAreaTrafficMultiplier(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL ResetTrafficMultipliers(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL FindInterceptPath(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetPurePursuitSteering(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL GetReachableMapNodes(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetReachableBoundingBox(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL GetPointZoneName(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetMapNodeZoneName(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetPathZonesSummary(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL SetPathAutoDestroy(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL SavePathToFile(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL LoadPathFromFile(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL ExportPathToString(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL ImportPathFromString(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL FindPathForVehicleCat(AMX* amx, cell* params);
 }
 
 extern AMX_NATIVE_INFO PluginNatives[];

@@ -52,6 +52,13 @@ enum RoutePreference : uint8_t
 	ROUTE_PREF_AVOID_HIGHWAYS = 2
 };
 
+enum VehicleCategory : uint8_t
+{
+	VEHICLE_CAT_STANDARD = 0,
+	VEHICLE_CAT_HEAVY_TRUCK = 1,
+	VEHICLE_CAT_MOTORCYCLE = 2
+};
+
 
 typedef void(*logprintf_t)(const char* format, ...);
 extern logprintf_t logprintf;

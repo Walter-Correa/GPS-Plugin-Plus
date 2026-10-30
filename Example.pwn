@@ -350,6 +350,169 @@ DemonstrateIntersectionDetection(MapNode:nodeid)
 }
 
 // -----------------------------------------------------------------------------
+// Example 10: Dynamic Live Traffic & Congestion Detours
+// -----------------------------------------------------------------------------
+DemonstrateLiveTraffic(MapNode:startNode, MapNode:destNode)
+{
+    printf("\n--- [Demo 10: Live Traffic Congestion & Detours] ---");
+
+    new Path:normalPath;
+    FindPath(startNode, destNode, normalPath);
+
+    // Simulate traffic jam: 4x slower cost in downtown area
+    SetAreaTrafficMultiplier(1400.0, -1800.0, 1700.0, -1500.0, 4.0);
+
+    new Path:trafficPath;
+    FindPath(startNode, destNode, trafficPath);
+
+    new Float:len1, Float:len2;
+    GetPathLength(normalPath, len1);
+    GetPathLength(trafficPath, len2);
+    printf("Clear traffic distance: %.1fm | Congested detour distance: %.1fm", len1, len2);
+
+    ResetTrafficMultipliers();
+    DestroyPath(normalPath);
+    DestroyPath(trafficPath);
+}
+
+// -----------------------------------------------------------------------------
+// Example 11: Police Pursuit Interception Prediction
+// -----------------------------------------------------------------------------
+DemonstrateTacticalIntercept(MapNode:policeNode, MapNode:fugitiveNode)
+{
+    printf("\n--- [Demo 11: Police Pursuit Tactical Interception] ---");
+
+    new Path:interceptPath;
+    new MapNode:interceptNode;
+    new Float:timeToIntercept;
+
+    // Fugitive driving at 90 km/h, Police pursuit unit responding at 130 km/h
+    if (FindInterceptPath(policeNode, fugitiveNode, 90.0, 130.0, interceptPath, interceptNode, timeToIntercept) == GPS_ERROR_NONE)
+    {
+        printf("Tactical Intercept Point: Node %d | Estimated Time: %.1f seconds",
+            _:interceptNode, timeToIntercept);
+        DestroyPath(interceptPath);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Example 12: Pure Pursuit Autonomous Bot Driving Controller
+// -----------------------------------------------------------------------------
+DemonstratePurePursuit(MapNode:startNode, MapNode:destNode)
+{
+    printf("\n--- [Demo 12: Autonomous NPC Pure Pursuit Controller] ---");
+
+    new Path:pathid;
+    if (FindPath(startNode, destNode, pathid) == GPS_ERROR_NONE)
+    {
+        new Float:botX = 1545.0, Float:botY = -1670.0, Float:botAngle = 90.0;
+        new Float:steerRatio, Float:recommendedSpeed;
+
+        GetPurePursuitSteering(pathid, botX, botY, botAngle, 10.0, steerRatio, recommendedSpeed);
+        printf("Pure Pursuit Output: Steer Ratio: %.2f (-1.0 left to +1.0 right) | Speed: %.1f km/h",
+            steerRatio, recommendedSpeed);
+
+        DestroyPath(pathid);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Example 13: Radial Reachability & Isochrones
+// -----------------------------------------------------------------------------
+DemonstrateReachability(MapNode:hubNode)
+{
+    printf("\n--- [Demo 13: Radial Reachability & Isochrones] ---");
+
+    new MapNode:reachable[64];
+    new reachedCount;
+    // Find all nodes reachable in 30 seconds at 60 km/h
+    GetReachableMapNodes(hubNode, 30.0, true, 60.0, reachable, sizeof(reachable), reachedCount);
+
+    new Float:minX, Float:minY, Float:maxX, Float:maxY;
+    GetReachableBoundingBox(hubNode, 500.0, minX, minY, maxX, maxY);
+
+    printf("Reachable nodes in 30s: %d | Coverage Box: (%.1f, %.1f) to (%.1f, %.1f)",
+        reachedCount, minX, minY, maxX, maxY);
+}
+
+// -----------------------------------------------------------------------------
+// Example 14: San Andreas Zone Lookups & Route Neighborhood Summary
+// -----------------------------------------------------------------------------
+DemonstrateZones(MapNode:startNode, MapNode:destNode)
+{
+    printf("\n--- [Demo 14: Native San Andreas Zone Lookups] ---");
+
+    new zone[32];
+    GetPointZoneName(2490.0, -1670.0, 13.5, zone);
+    printf("Coordinate (2490.0, -1670.0) is in: %s", zone);
+
+    new Path:pathid;
+    if (FindPath(startNode, destNode, pathid) == GPS_ERROR_NONE)
+    {
+        new zonesList[8][32];
+        new zonesCount;
+        GetPathZonesSummary(pathid, zonesList, sizeof(zonesList), zonesCount);
+
+        printf("Route itinerary crosses %d zones:", zonesCount);
+        for (new i = 0; i < zonesCount; i++)
+        {
+            printf("  Leg %d: %s", i + 1, zonesList[i]);
+        }
+        DestroyPath(pathid);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Example 15: Path Auto-Destruction TTL & String Serialization
+// -----------------------------------------------------------------------------
+DemonstrateSerializationAndTTL(MapNode:startNode, MapNode:destNode)
+{
+    printf("\n--- [Demo 15: Serialization & Anti-Leak TTL] ---");
+
+    new Path:pathid;
+    if (FindPath(startNode, destNode, pathid) == GPS_ERROR_NONE)
+    {
+        // Set auto-destruction safety timer in case script fails to free
+        SetPathAutoDestroy(pathid, 30000); // Auto-deletes in 30s
+
+        new buffer[256];
+        ExportPathToString(pathid, buffer);
+        printf("Exported Path String (first 60 chars): %.60s...", buffer);
+
+        new Path:importedPath;
+        if (ImportPathFromString(buffer, importedPath) == GPS_ERROR_NONE)
+        {
+            printf("Successfully re-imported path ID %d from database string!", _:importedPath);
+            DestroyPath(importedPath);
+        }
+
+        DestroyPath(pathid);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Example 16: Heavy Truck vs Motorcycle Category Restrictions
+// -----------------------------------------------------------------------------
+DemonstrateVehicleCategoryRouting(MapNode:startNode, MapNode:destNode)
+{
+    printf("\n--- [Demo 16: Heavy Truck vs Motorcycle Category Routing] ---");
+
+    new Path:truckPath, Path:motoPath;
+    FindPathForVehicleCat(startNode, destNode, truckPath, VEHICLE_CAT_HEAVY_TRUCK);
+    FindPathForVehicleCat(startNode, destNode, motoPath, VEHICLE_CAT_MOTORCYCLE);
+
+    new Float:truckLen, Float:motoLen;
+    GetPathLength(truckPath, truckLen);
+    GetPathLength(motoPath, motoLen);
+
+    printf("Heavy Truck Path (width >= 6m): %.1fm | Motorcycle Path (shortcuts): %.1fm",
+        truckLen, motoLen);
+
+    DestroyPath(truckPath);
+    DestroyPath(motoPath);
+}
+
+// -----------------------------------------------------------------------------
 // Main Entry: Executes test suite
 // -----------------------------------------------------------------------------
 main()
@@ -373,6 +536,12 @@ main()
         DemonstrateRealtimeNavigation(nodeA, nodeB);
         DemonstratePathSimplification(nodeA, nodeB);
         DemonstrateIntersectionDetection(nodeA);
+        DemonstrateLiveTraffic(nodeA, nodeB);
+        DemonstratePurePursuit(nodeA, nodeB);
+        DemonstrateReachability(nodeA);
+        DemonstrateZones(nodeA, nodeB);
+        DemonstrateSerializationAndTTL(nodeA, nodeB);
+        DemonstrateVehicleCategoryRouting(nodeA, nodeB);
     }
 
     new MapNode:nodeC, MapNode:nodeD;
@@ -381,6 +550,7 @@ main()
     if (IsValidMapNode(nodeA) && IsValidMapNode(nodeB) && IsValidMapNode(nodeC) && IsValidMapNode(nodeD))
     {
         DemonstrateMultiStopDelivery(nodeA, nodeC, nodeD, nodeB);
+        DemonstrateTacticalIntercept(nodeA, nodeC);
     }
 
     DemonstrateRoadSnappingAndParking(lsDowntownX, lsDowntownY, lsDowntownZ);

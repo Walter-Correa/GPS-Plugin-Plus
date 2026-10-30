@@ -16,6 +16,7 @@ Connection::Connection(const int id, Node* source, Node* target, const float dis
 	right_lanes_ = right_lanes;
 	one_way_ = one_way;
 	blocked_ = false;
+	traffic_multiplier_ = 1.0f;
 }
 
 
@@ -76,6 +77,18 @@ bool Connection::isBlocked() const
 void Connection::setBlocked(const bool blocked)
 {
 	blocked_ = blocked;
+}
+
+
+float Connection::getTrafficMultiplier() const
+{
+	return traffic_multiplier_;
+}
+
+
+void Connection::setTrafficMultiplier(const float multiplier)
+{
+	traffic_multiplier_ = (multiplier < 0.01f) ? 0.01f : multiplier;
 }
 
 

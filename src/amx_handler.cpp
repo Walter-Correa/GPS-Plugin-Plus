@@ -2,6 +2,7 @@
 #include <mutex>
 
 #include "amx.h"
+#include "container.h"
 
 
 namespace AmxHandler
@@ -36,5 +37,7 @@ namespace AmxHandler
 		{
 			amx.second->processCallbacks();
 		}
+
+		Container::Paths::ProcessTick();
 	}
 }

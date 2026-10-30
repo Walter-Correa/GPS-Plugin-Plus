@@ -34,6 +34,11 @@ namespace Container
 		bool FindClosestRoadPoint(float x, float y, float z, float& out_x, float& out_y, float& out_z, float& out_angle, float& out_road_width, int& out_conn_id, PathType type = PATH_TYPE_VEHICLE);
 		const std::unordered_map<int, Connection*>& GetAll();
 		int GetHighestID();
+
+		void SetTrafficMultiplier(int id, float multiplier);
+		float GetTrafficMultiplier(int id);
+		void SetAreaTrafficMultiplier(float minx, float miny, float maxx, float maxy, float multiplier);
+		void ResetTrafficMultipliers();
 	}
 	
 	namespace Paths
@@ -43,5 +48,6 @@ namespace Container
 		Path* Find(int id);
 		std::unordered_map<int, Path*> GetAll();
 		int GetHighestID();
+		void ProcessTick();
 	}
 };

@@ -40,6 +40,31 @@
   * Automatically detect when a driver veers off-course to trigger seamless dynamic recalculations.
   * Continuously compute remaining trip distance and ETA from the vehicle's current step (`GetPathRemainingInfo`).
 
+* **Live Traffic & Dynamic Congestion Routing:**
+  * Dynamically assign congestion multipliers to specific roadways or geographic bounding boxes (`SetConnectionTrafficMultiplier`, `SetAreaTrafficMultiplier`, `ResetTrafficMultipliers`).
+  * A* automatically reroutes vehicles around rush-hour bottlenecks, accidents, or police cordons.
+
+* **Predictive Interception & Pursuit Navigation:**
+  * Calculate the optimal future intercept point where a pursuing unit (police / hunters) can cut off a fleeing suspect (`FindInterceptPath`), saving critical pursuit response time.
+
+* **Autonomous Driving Pure Pursuit Controller (for NPCs/Bots):**
+  * Real-time vehicle steering geometry controller (`GetPurePursuitSteering`) providing normalized steer ratios ($-1.0$ to $+1.0$) and adaptive curve cornering speeds for NPC traffic and bots.
+
+* **Radial Reachability & Isochrones:**
+  * Compute all road nodes accessible within a distance or time threshold (`GetReachableMapNodes`), and compute dispatch coverage bounding boxes (`GetReachableBoundingBox`).
+
+* **Built-in San Andreas Neighborhoods / Zones Dictionary:**
+  * Instant $O(1)$ native zone lookups (`GetPointZoneName`, `GetMapNodeZoneName`) across 374 official San Andreas areas without requiring bulky Pawn scripts, plus full route neighborhood summaries (`GetPathZonesSummary`).
+
+* **Automatic Path Garbage Collection (Anti-Leak TTL):**
+  * Configurable Time-To-Live auto-destruction (`SetPathAutoDestroy`), ensuring paths are automatically cleaned up in ticks if scripters forget to destroy them.
+
+* **Custom Route Serialization & Persistence:**
+  * Save and load active routes to disk (`SavePathToFile`, `LoadPathFromFile`) or export/import as compact comma-separated strings (`ExportPathToString`, `ImportPathFromString`) for direct database storage.
+
+* **Vehicle Category Routing:**
+  * Specialized vehicle constraints (`FindPathForVehicleCat`) allowing heavy trucks to avoid narrow alleys (< 6.0m) or allowing motorcycles to take tight shortcuts.
+
 * **Multi-Stop Route Optimization (TSP):**
   * Chain multiple waypoints into a single continuous path (`FindMultiStopPath`).
   * Built-in Traveling Salesperson (TSP) heuristic automatically reorders intermediate stops to minimize overall driving distance — ideal for delivery, courier, and trucking jobs.
@@ -173,6 +198,13 @@ Add the include file at the top of your script:
 | `ROUTE_PREF_SHORTEST` | `0` | Shortest physical distance (in meters). |
 | `ROUTE_PREF_HIGHWAYS` | `1` | Prioritizes freeways and wide multi-lane boulevards over narrow streets. |
 | `ROUTE_PREF_AVOID_HIGHWAYS` | `2` | Avoids highways and expressways (useful for bicycles or pedestrian routes). |
+
+#### `VehicleCategory`
+| Constant | Value | Description |
+| :--- | :---: | :--- |
+| `VEHICLE_CAT_STANDARD` | `0` | Standard cars, SUVs, and passenger vehicles. |
+| `VEHICLE_CAT_HEAVY_TRUCK` | `1` | Heavy trucks and articulated lorries (restricts narrow roads < 6.0m). |
+| `VEHICLE_CAT_MOTORCYCLE` | `2` | Motorcycles and mopeds (can traverse narrow pathways and shortcuts). |
 
 ---
 
@@ -352,9 +384,102 @@ native FindMultiStopPath(const MapNode:stops[], stops_count, &Path:pathid, bool:
 Combines multiple waypoints into a unified path. If `optimize_order` is `true`, runs a TSP nearest-neighbor algorithm to reorder intermediate stops and minimize total travel distance.
 
 ```pawn
+native FindPathForVehicleCat(MapNode:source, MapNode:target, &Path:pathid, VehicleCategory:cat = VEHICLE_CAT_STANDARD, RoutePreference:pref = ROUTE_PREF_SHORTEST);
+```
+Computes pathfinding taking into account vehicle dimensions and access rights (e.g. `VEHICLE_CAT_HEAVY_TRUCK` avoids narrow roadways under 6.0m).
+
+```pawn
+native FindInterceptPath(MapNode:pursuer_node, MapNode:target_node, Float:target_speed_kmh, Float:pursuer_speed_kmh, &Path:pathid, &MapNode:intercept_node, &Float:time_to_intercept, PathType:type = PATH_TYPE_VEHICLE);
+```
+Predicts the target's forward movement on the road network and computes the fastest route to an optimal ahead interception point for police or pursuit units.
+
+```pawn
 native Task:FindPathAsync(MapNode:source, MapNode:target);
 ```
 Asynchronous pathfinding task for [PawnPlus](https://github.com/IllidanS4/PawnPlus) with `task_await`.
+
+---
+
+#### Dynamic Traffic & Congestion
+
+```pawn
+native SetConnectionTrafficMultiplier(Connection:connectionid, Float:multiplier);
+native Float:GetConnectionTrafficMultiplier(Connection:connectionid);
+```
+Sets or gets the traffic congestion cost multiplier for a specific roadway segment (e.g. `2.5` = 2.5x slower, encouraging detours).
+
+```pawn
+native SetAreaTrafficMultiplier(Float:minx, Float:miny, Float:maxx, Float:maxy, Float:multiplier);
+```
+Applies a congestion multiplier across all connections inside a 2D bounding area (e.g. rush-hour downtown traffic or event cordons).
+
+```pawn
+native ResetTrafficMultipliers();
+```
+Restores all road connections to normal neutral traffic flow (`1.0`).
+
+---
+
+#### Autonomous Pure Pursuit Steering (NPCs / Bots)
+
+```pawn
+native GetPurePursuitSteering(Path:pathid, Float:vehicle_x, Float:vehicle_y, Float:vehicle_angle, Float:lookahead_dist, &Float:steer_ratio, &Float:recommended_speed_kmh);
+```
+Implements the robotics Pure Pursuit controller: computes normalized steering ratio ($-1.0$ full left to $+1.0$ full right) and safe curve-cornering speeds for autonomous driving NPCs and bots.
+
+---
+
+#### Radial Reachability & Isochrones
+
+```pawn
+native GetReachableMapNodes(MapNode:source, Float:limit_value, bool:by_time, Float:speed_kmh, MapNode:nodes_out[], max_nodes = sizeof(nodes_out), &count, PathType:type = PATH_TYPE_VEHICLE);
+```
+Performs a Dijkstra exploration from `source`, collecting all nodes reachable within a given distance (meters) or time (seconds).
+
+```pawn
+native GetReachableBoundingBox(MapNode:source, Float:max_distance, &Float:minx, &Float:miny, &Float:maxx, &Float:maxy, PathType:type = PATH_TYPE_VEHICLE);
+```
+Returns the minimum and maximum world coordinates of all roads reachable within `max_distance` meters.
+
+---
+
+#### San Andreas Zones & Neighborhoods
+
+```pawn
+native GetPointZoneName(Float:x, Float:y, Float:z, zone_name[], max_len = sizeof(zone_name));
+```
+Instant $O(1)$ lookup returning the official GTA San Andreas zone name (e.g. "Ganton", "Rodeo", "Downtown") for any 3D coordinate.
+
+```pawn
+native GetMapNodeZoneName(MapNode:nodeid, zone_name[], max_len = sizeof(zone_name));
+```
+Returns the zone name where a specific map node is located.
+
+```pawn
+native GetPathZonesSummary(Path:pathid, zones[][], max_zones, &zones_count, max_zone_len = sizeof(zones[]));
+```
+Extracts an ordered list of unique neighborhoods crossed along a path (e.g. "Ganton" $\to$ "Idlewood" $\to$ "Commerce").
+
+---
+
+#### Path Auto-Destruction & Serialization
+
+```pawn
+native SetPathAutoDestroy(Path:pathid, milliseconds = 60000);
+```
+Sets a Time-To-Live (TTL) on a path so it is automatically freed from server memory after the given duration, preventing memory leaks if the script forgets to call `DestroyPath`.
+
+```pawn
+native SavePathToFile(Path:pathid, const filename[]);
+native LoadPathFromFile(const filename[], &Path:pathid);
+```
+Saves or loads path waypoints to/from `scriptfiles/`.
+
+```pawn
+native ExportPathToString(Path:pathid, buffer[], max_len = sizeof(buffer));
+native ImportPathFromString(const buffer[], &Path:pathid);
+```
+Serializes or deserializes a path into a compact comma-separated string (e.g. `"102,103,105,108"`), ideal for direct database or config storage.
 
 ---
 

@@ -21,6 +21,9 @@ public:
 	bool isBlocked() const;
 	void setBlocked(bool blocked);
 
+	float getTrafficMultiplier() const;
+	void setTrafficMultiplier(float multiplier);
+
 	bool getLanePosition(int lane_index, float& out_x, float& out_y, float& out_z) const;
 
 private:
@@ -34,4 +37,5 @@ private:
 	int right_lanes_;
 	bool one_way_;
 	bool blocked_;
+	float traffic_multiplier_;
 };

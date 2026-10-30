@@ -62,6 +62,13 @@ enum RoutePreference
     ROUTE_PREF_AVOID_HIGHWAYS       = 2
 }
 
+enum VehicleCategory
+{
+    VEHICLE_CAT_STANDARD            = 0,
+    VEHICLE_CAT_HEAVY_TRUCK         = 1,
+    VEHICLE_CAT_MOTORCYCLE          = 2
+}
+
 enum RoadPosition
 {
     ROAD_POS_CENTER                 = 0,
@@ -136,6 +143,30 @@ native GetSimplifiedPathNodes(Path:pathid, Float:tolerance_meters, MapNode:outpu
 
 native bool:IsMapNodeIntersection(MapNode:nodeid, &connection_count = 0);
 native GetMapNodeConnectionTarget(MapNode:nodeid, index, &MapNode:target_nodeid);
+
+native SetConnectionTrafficMultiplier(Connection:connectionid, Float:multiplier);
+native Float:GetConnectionTrafficMultiplier(Connection:connectionid);
+native SetAreaTrafficMultiplier(Float:minx, Float:miny, Float:maxx, Float:maxy, Float:multiplier);
+native ResetTrafficMultipliers();
+
+native FindInterceptPath(MapNode:pursuer_node, MapNode:target_node, Float:target_speed_kmh, Float:pursuer_speed_kmh, &Path:pathid, &MapNode:intercept_node, &Float:time_to_intercept, PathType:type = PATH_TYPE_VEHICLE);
+native GetPurePursuitSteering(Path:pathid, Float:vehicle_x, Float:vehicle_y, Float:vehicle_angle, Float:lookahead_dist, &Float:steer_ratio, &Float:recommended_speed_kmh);
+
+native GetReachableMapNodes(MapNode:source, Float:limit_value, bool:by_time, Float:speed_kmh, MapNode:nodes_out[], max_nodes = sizeof(nodes_out), &count, PathType:type = PATH_TYPE_VEHICLE);
+native GetReachableBoundingBox(MapNode:source, Float:max_distance, &Float:minx, &Float:miny, &Float:maxx, &Float:maxy, PathType:type = PATH_TYPE_VEHICLE);
+
+native GetPointZoneName(Float:x, Float:y, Float:z, zone_name[], max_len = sizeof(zone_name));
+native GetMapNodeZoneName(MapNode:nodeid, zone_name[], max_len = sizeof(zone_name));
+native GetPathZonesSummary(Path:pathid, zones[][], max_zones, &zones_count, max_zone_len = sizeof(zones[]));
+
+native SetPathAutoDestroy(Path:pathid, milliseconds = 60000);
+
+native SavePathToFile(Path:pathid, const filename[]);
+native LoadPathFromFile(const filename[], &Path:pathid);
+native ExportPathToString(Path:pathid, buffer[], max_len = sizeof(buffer));
+native ImportPathFromString(const buffer[], &Path:pathid);
+
+native FindPathForVehicleCat(MapNode:source, MapNode:target, &Path:pathid, VehicleCategory:cat = VEHICLE_CAT_STANDARD, RoutePreference:pref = ROUTE_PREF_SHORTEST);
 
 
 #if defined _PawnPlus_included

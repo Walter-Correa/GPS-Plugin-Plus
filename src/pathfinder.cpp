@@ -2,6 +2,7 @@
 #include <queue>
 #include <exception>
 #include <functional>
+#include <unordered_set>
 
 #include "pathfinder.h"
 #include "connection.h"
@@ -38,7 +39,7 @@ namespace Pathfinder
 	};
 
 
-	Path* FindPathInternal(Node* start, Node* target, const PathType type, const RoutePreference pref)
+	Path* FindPathInternal(Node* start, Node* target, const PathType type, const RoutePreference pref, const VehicleCategory cat)
 	{
 		if (start == nullptr || target == nullptr || start->isBlocked() || target->isBlocked())
 		{
@@ -79,6 +80,11 @@ namespace Pathfinder
 					continue;
 				}
 
+				if (cat == VEHICLE_CAT_HEAVY_TRUCK && connection->getRoadWidth() < 6.0f)
+				{
+					continue;
+				}
+
 				const auto connection_target = connection->getTarget();
 
 				if (connection_target == current_node->node || connection_target->isSetForDeletion() || connection_target->isBlocked())
@@ -110,7 +116,13 @@ namespace Pathfinder
 					}
 				}
 
-				const auto travel_cost = edge_dist * weight_factor;
+				if (cat == VEHICLE_CAT_MOTORCYCLE && connection->getRoadWidth() < 6.0f)
+				{
+					weight_factor *= 0.8f;
+				}
+
+				const float traffic_mult = connection->getTrafficMultiplier();
+				const auto travel_cost = edge_dist * weight_factor * traffic_mult;
 				const auto distance = current_node->distance + travel_cost;
 
 				if (next_node->distance > distance)
@@ -167,12 +179,12 @@ namespace Pathfinder
 	}
 
 
-	int FindPath(Node* start, Node* target, const PathType type, const RoutePreference pref)
+	int FindPath(Node* start, Node* target, const PathType type, const RoutePreference pref, const VehicleCategory cat)
 	{
 		try
 		{
 			Container::LockShared();
-			const auto path = FindPathInternal(start, target, type, pref);
+			const auto path = FindPathInternal(start, target, type, pref, cat);
 			Container::UnlockShared();
 
 			Container::LockExclusive();
@@ -189,12 +201,12 @@ namespace Pathfinder
 	}
 
 
-	void FindPathThreaded(Node* start, Node* target, Callback* callback, const PathType type, const RoutePreference pref)
+	void FindPathThreaded(Node* start, Node* target, Callback* callback, const PathType type, const RoutePreference pref, const VehicleCategory cat)
 	{
 		try
 		{
 			Container::LockShared();
-			const auto path = FindPathInternal(start, target, type, pref);
+			const auto path = FindPathInternal(start, target, type, pref, cat);
 			Container::UnlockShared();
 
 			Container::LockExclusive();
@@ -320,5 +332,163 @@ namespace Pathfinder
 			Container::UnlockShared();
 			return INVALID_PATH_ID;
 		}
+	}
+
+
+	int FindInterceptPath(Node* pursuer, Node* target, float target_speed_kmh, float pursuer_speed_kmh, int& out_intercept_node_id, float& out_time_to_intercept, const PathType type)
+	{
+		if (pursuer == nullptr || target == nullptr)
+		{
+			return INVALID_PATH_ID;
+		}
+
+		const float v_target = std::max(2.0f, (target_speed_kmh * 1000.0f) / 3600.0f);
+		const float v_pursuer = std::max(2.0f, (pursuer_speed_kmh * 1000.0f) / 3600.0f);
+
+		std::vector<Node*> projected_nodes;
+		std::vector<float> projected_times;
+
+		Node* curr = target;
+		projected_nodes.push_back(curr);
+		projected_times.push_back(0.0f);
+
+		float accumulated_target_dist = 0.0f;
+		std::unordered_set<int> visited_target_ids;
+		visited_target_ids.insert(curr->getID());
+
+		const int max_horizon = 30;
+		for (int step = 0; step < max_horizon; ++step)
+		{
+			Connection* best_conn = nullptr;
+			float best_conn_score = -1.0f;
+
+			for (auto conn : curr->getConnections())
+			{
+				if (conn->isBlocked()) continue;
+				auto tgt = conn->getTarget();
+				if (tgt == nullptr || tgt->isBlocked() || tgt->getType() != type) continue;
+				if (visited_target_ids.find(tgt->getID()) != visited_target_ids.end()) continue;
+
+				float score = conn->getRoadWidth() + conn->getDistance();
+				if (score > best_conn_score)
+				{
+					best_conn_score = score;
+					best_conn = conn;
+				}
+			}
+
+			if (best_conn == nullptr) break;
+
+			curr = best_conn->getTarget();
+			visited_target_ids.insert(curr->getID());
+			accumulated_target_dist += best_conn->getDistance();
+
+			projected_nodes.push_back(curr);
+			projected_times.push_back(accumulated_target_dist / v_target);
+		}
+
+		Node* chosen_intercept_node = projected_nodes.back();
+		float chosen_time = projected_times.back();
+		int chosen_path_id = INVALID_PATH_ID;
+
+		for (size_t i = 1; i < projected_nodes.size(); ++i)
+		{
+			Node* candidate = projected_nodes[i];
+			const float t_target = projected_times[i];
+			const float approx_pursuer_dist = pursuer->getDistanceFromNode(candidate) * 1.25f;
+			const float approx_pursuer_time = approx_pursuer_dist / v_pursuer;
+
+			if (approx_pursuer_time <= t_target + 2.0f)
+			{
+				int path_id = FindPath(pursuer, candidate, type, ROUTE_PREF_HIGHWAYS);
+				if (path_id != INVALID_PATH_ID)
+				{
+					auto path_obj = Container::Paths::Find(path_id);
+					if (path_obj != nullptr)
+					{
+						const float actual_time = path_obj->getLength() / v_pursuer;
+						if (actual_time <= t_target + 3.0f || i == projected_nodes.size() - 1)
+						{
+							chosen_intercept_node = candidate;
+							chosen_time = actual_time;
+							chosen_path_id = path_id;
+							break;
+						}
+					}
+				}
+			}
+		}
+
+		if (chosen_path_id == INVALID_PATH_ID)
+		{
+			chosen_path_id = FindPath(pursuer, target, type, ROUTE_PREF_HIGHWAYS);
+			if (chosen_path_id != INVALID_PATH_ID)
+			{
+				auto path_obj = Container::Paths::Find(chosen_path_id);
+				chosen_time = (path_obj != nullptr) ? (path_obj->getLength() / v_pursuer) : 0.0f;
+				chosen_intercept_node = target;
+			}
+		}
+
+		out_intercept_node_id = (chosen_intercept_node != nullptr) ? chosen_intercept_node->getID() : target->getID();
+		out_time_to_intercept = chosen_time;
+		return chosen_path_id;
+	}
+
+
+	std::vector<int> GetReachableNodes(Node* source, const float limit_value, const bool by_time, const float speed_kmh, const PathType type)
+	{
+		std::vector<int> reachable_ids;
+		if (source == nullptr || source->isBlocked() || limit_value <= 0.0f)
+		{
+			return reachable_ids;
+		}
+
+		const float speed_mps = std::max(1.0f, (speed_kmh * 1000.0f) / 3600.0f);
+
+		struct QNode
+		{
+			Node* node;
+			float cost;
+		};
+
+		auto comp = [](const QNode& a, const QNode& b) { return a.cost > b.cost; };
+		std::priority_queue<QNode, std::vector<QNode>, decltype(comp)> queue(comp);
+		std::vector<float> min_cost(Container::Nodes::GetHighestID() + 1, infinity);
+
+		min_cost[source->getID()] = 0.0f;
+		queue.push({ source, 0.0f });
+
+		while (!queue.empty())
+		{
+			auto current = queue.top();
+			queue.pop();
+
+			if (current.cost > min_cost[current.node->getID()]) continue;
+
+			reachable_ids.push_back(current.node->getID());
+
+			for (auto conn : current.node->getConnections())
+			{
+				if (conn->isBlocked()) continue;
+				auto target = conn->getTarget();
+				if (target == nullptr || target->isBlocked() || target->getType() != type) continue;
+
+				float edge_cost = conn->getDistance();
+				if (by_time)
+				{
+					edge_cost /= speed_mps;
+				}
+
+				float new_cost = current.cost + edge_cost;
+				if (new_cost <= limit_value && new_cost < min_cost[target->getID()])
+				{
+					min_cost[target->getID()] = new_cost;
+					queue.push({ target, new_cost });
+				}
+			}
+		}
+
+		return reachable_ids;
 	}
 };

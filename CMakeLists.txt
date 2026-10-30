@@ -80,6 +80,7 @@ set(GPS_COMMON_SOURCES
   src/node.cpp
   src/path.cpp
   src/pathfinder.cpp
+  src/zones.cpp
   lib/sdk/amxplugin.cpp
   lib/sdk/amxplugin2.cpp
 )
