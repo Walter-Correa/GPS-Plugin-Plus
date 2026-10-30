@@ -391,9 +391,10 @@ native FindInterceptPath(MapNode:pursuer_node, MapNode:target_node, Float:target
 Predicts the target's forward movement on the road network and computes the fastest route to an optimal ahead interception point for police or pursuit units.
 
 ```pawn
-native Task:FindPathAsync(MapNode:source, MapNode:target);
+stock Task:FindPathAsync(MapNode:source, MapNode:target);
+stock Task:FindPathAsyncEx(MapNode:source, MapNode:target, PathType:type = PATH_TYPE_VEHICLE, RoutePreference:pref = ROUTE_PREF_SHORTEST);
 ```
-Asynchronous pathfinding task for [PawnPlus](https://github.com/IllidanS4/PawnPlus) with `task_await`.
+Asynchronous pathfinding task for [PawnPlus](https://github.com/IllidanS4/PawnPlus) with `task_await`. `FindPathAsync` preserves original 2-parameter compatibility, while `FindPathAsyncEx` supports custom path types (vehicles, boats, pedestrians) and route preferences.
 
 ---
 

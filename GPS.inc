@@ -218,6 +218,18 @@ native FindPathAvoidTolls(MapNode:source, MapNode:target, &Path:pathid, PathType
         return task;
     }
 
+    stock Task:FindPathAsyncEx(MapNode:source, MapNode:target, PathType:type = PATH_TYPE_VEHICLE, RoutePreference:pref = ROUTE_PREF_SHORTEST) 
+    {
+        new Task:task = task_new();
+
+        if (FindPathThreadedEx(source, target, type, pref, "FindPathAsyncResponse", "i", _:task) != GPS_ERROR_NONE) 
+        {
+            task_set_error_ticks(task, amx_err_exit, 0);
+        }
+
+        return task;
+    }
+
     forward public FindPathAsyncResponse(Path:path, Task:task);
     public FindPathAsyncResponse(Path:path, Task:task) 
     {

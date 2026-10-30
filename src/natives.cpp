@@ -965,7 +965,7 @@ namespace Natives
 
 		const auto type = static_cast<PathType>(params[3]);
 
-		if (params[0] >= (5 * 4) && params[4] >= 0 && params[4] <= 2)
+		if (params[0] >= (5 * 4) && params[4] >= 0 && params[4] <= ROUTE_PREF_AVOID_TOLLS)
 		{
 			const auto pref = static_cast<RoutePreference>(params[4]);
 			return FindPathThreadedInternal(amx, params, type, pref, 6);
