@@ -28,6 +28,7 @@ enum _:GPS_ERROR
 
 enum PathType
 {
+    PATH_TYPE_ANY                   = -1,
     PATH_TYPE_VEHICLE               = 0,
     PATH_TYPE_PEDESTRIAN            = 1,
     PATH_TYPE_BOAT                  = 2
@@ -92,7 +93,7 @@ native GetClosestMapNodeToPoint(Float:x, Float:y, Float:z, &MapNode:nodeid, MapN
 native GetClosestPedMapNodeToPoint(Float:x, Float:y, Float:z, &MapNode:nodeid, MapNode:ignorednode = GPS_INVALID_MAP_NODE_ID);
 native GetClosestBoatMapNodeToPoint(Float:x, Float:y, Float:z, &MapNode:nodeid, MapNode:ignorednode = GPS_INVALID_MAP_NODE_ID);
 
-native GetHighestMapNodeID();
+native GetHighestMapNodeID(PathType:type = PATH_TYPE_VEHICLE);
 native GetRandomMapNode(&MapNode:nodeid, PathType:type = PATH_TYPE_VEHICLE, Float:minz = -99999.0, Float:maxz = 99999.0);
 native GetRandomMapNodeFromArea(Float:minx, Float:miny, Float:maxx, Float:maxy, &MapNode:nodeid, PathType:type = PATH_TYPE_VEHICLE, Float:minz = -99999.0, Float:maxz = 99999.0);
 

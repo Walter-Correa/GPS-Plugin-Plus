@@ -344,9 +344,14 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL GetHighestMapNodeID(AMX* amx, cell* params)
 	{
-		CHECK_PARAMS(0);
+		auto type = PATH_TYPE_VEHICLE;
 
-		return Container::Nodes::GetHighestID();
+		if (params[0] >= (1 * 4))
+		{
+			type = static_cast<PathType>(params[1]);
+		}
+
+		return Container::Nodes::GetHighestID(type);
 	}
 
 

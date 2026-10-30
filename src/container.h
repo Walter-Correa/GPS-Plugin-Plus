@@ -21,7 +21,7 @@ namespace Container
 		Node* Find(int id);
 		Node* FindClosest(float x, float y, float z, PathType type = PATH_TYPE_VEHICLE, int ignored_id = -1);
 		const std::unordered_map<int, Node*>& GetAll();
-		int GetHighestID();
+		int GetHighestID(PathType type = static_cast<PathType>(-1));
 		void SetForDeletion(Node* node);
 		bool TryDelete(Node* node);
 	}

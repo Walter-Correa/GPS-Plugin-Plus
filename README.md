@@ -125,6 +125,7 @@ Add the include file at the top of your script:
 #### `PathType`
 | Constant | Value | Description |
 | :--- | :---: | :--- |
+| `PATH_TYPE_ANY` | `-1` | Any node type (wildcard / overall). |
 | `PATH_TYPE_VEHICLE` | `0` | Vehicle roadway nodes. |
 | `PATH_TYPE_PEDESTRIAN` | `1` | Pedestrian sidewalk and crossing nodes. |
 | `PATH_TYPE_BOAT` | `2` | Navigable water and ocean nodes. |
@@ -184,9 +185,9 @@ native GetMapNodeFlags(MapNode:nodeid, &PathNodeFlags:flags);
 Retrieves the node attributes (e.g., highway, crosswalk, roadblock flags).
 
 ```pawn
-native GetHighestMapNodeID();
+native GetHighestMapNodeID(PathType:type = PATH_TYPE_VEHICLE);
 ```
-Returns the highest allocated map node ID (useful for iteration).
+Returns the highest allocated map node ID for the given `PathType` (defaults to `PATH_TYPE_VEHICLE`, or pass `PATH_TYPE_ANY` for the highest ID across all node types). Useful for bounded loops.
 
 ---
 

@@ -19,6 +19,7 @@ namespace Container
 
 		std::unordered_map<int, Node*> nodes;
 		int highest_node_id;
+		int highest_node_id_by_type[3] = { -1, -1, -1 };
 
 		constexpr float GRID_CELL_SIZE = 100.0f;
 
@@ -107,6 +108,15 @@ namespace Container
 			if (id > highest_node_id)
 			{
 				highest_node_id = id;
+			}
+
+			const int type_idx = static_cast<int>(type);
+			if (type_idx >= 0 && type_idx < 3)
+			{
+				if (id > highest_node_id_by_type[type_idx])
+				{
+					highest_node_id_by_type[type_idx] = id;
+				}
 			}
 
 			return true;
@@ -211,8 +221,14 @@ namespace Container
 			return nodes;
 		}
 
-		int GetHighestID()
+		int GetHighestID(const PathType type)
 		{
+			const int type_idx = static_cast<int>(type);
+			if (type_idx >= 0 && type_idx < 3)
+			{
+				return highest_node_id_by_type[type_idx];
+			}
+
 			return highest_node_id;
 		}
 
