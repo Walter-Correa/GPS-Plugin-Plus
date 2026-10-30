@@ -90,9 +90,6 @@ native GetMapNodeDistanceFromPoint(MapNode:nodeid, Float:x, Float:y, Float:z, &F
 native GetMapNodeAngleFromPoint(MapNode:nodeid, Float:x, Float:y, &Float:angle, bool:facing_angle = false);
 native GetClosestMapNodeToPoint(Float:x, Float:y, Float:z, &MapNode:nodeid, MapNode:ignorednode = GPS_INVALID_MAP_NODE_ID, PathType:type = PATH_TYPE_VEHICLE);
 
-native GetClosestPedMapNodeToPoint(Float:x, Float:y, Float:z, &MapNode:nodeid, MapNode:ignorednode = GPS_INVALID_MAP_NODE_ID);
-native GetClosestBoatMapNodeToPoint(Float:x, Float:y, Float:z, &MapNode:nodeid, MapNode:ignorednode = GPS_INVALID_MAP_NODE_ID);
-
 native GetHighestMapNodeID(PathType:type = PATH_TYPE_VEHICLE);
 native GetRandomMapNode(&MapNode:nodeid, PathType:type = PATH_TYPE_VEHICLE, Float:minz = -99999.0, Float:maxz = 99999.0);
 native GetRandomMapNodeFromArea(Float:minx, Float:miny, Float:maxx, Float:maxy, &MapNode:nodeid, PathType:type = PATH_TYPE_VEHICLE, Float:minz = -99999.0, Float:maxz = 99999.0);
@@ -102,12 +99,6 @@ native SaveMapNodesToFile(const filename[]);
 native FindPath(MapNode:source, MapNode:target, &Path:pathid, PathType:type = PATH_TYPE_VEHICLE);
 native FindPathThreaded(MapNode:source, MapNode:target, const callback[], const format[] = "", {Float, _}:...);
 native FindPathThreadedEx(MapNode:source, MapNode:target, PathType:type, const callback[], const format[] = "", {Float, _}:...);
-
-native FindPedPath(MapNode:source, MapNode:target, &Path:pathid);
-native FindPedPathThreaded(MapNode:source, MapNode:target, const callback[], const format[] = "", {Float, _}:...);
-
-native FindBoatPath(MapNode:source, MapNode:target, &Path:pathid);
-native FindBoatPathThreaded(MapNode:source, MapNode:target, const callback[], const format[] = "", {Float, _}:...);
 
 native bool:IsValidPath(Path:pathid);
 native GetPathSize(Path:pathid, &size);

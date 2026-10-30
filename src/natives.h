@@ -51,9 +51,6 @@ namespace Natives
 	cell AMX_NATIVE_CALL GetMapNodeAngleFromPoint(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL GetClosestMapNodeToPoint(AMX* amx, cell* params);
 
-	cell AMX_NATIVE_CALL GetClosestPedMapNodeToPoint(AMX* amx, cell* params);
-	cell AMX_NATIVE_CALL GetClosestBoatMapNodeToPoint(AMX* amx, cell* params);
-
 	cell AMX_NATIVE_CALL GetHighestMapNodeID(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL GetRandomMapNode(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL GetRandomMapNodeFromArea(AMX* amx, cell* params);
@@ -63,12 +60,6 @@ namespace Natives
 	cell AMX_NATIVE_CALL FindPath(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL FindPathThreaded(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL FindPathThreadedEx(AMX* amx, cell* params);
-
-	cell AMX_NATIVE_CALL FindPedPath(AMX* amx, cell* params);
-	cell AMX_NATIVE_CALL FindPedPathThreaded(AMX* amx, cell* params);
-
-	cell AMX_NATIVE_CALL FindBoatPath(AMX* amx, cell* params);
-	cell AMX_NATIVE_CALL FindBoatPathThreaded(AMX* amx, cell* params);
 
 	cell AMX_NATIVE_CALL IsValidPath(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL GetPathSize(AMX* amx, cell* params);

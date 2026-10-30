@@ -265,8 +265,6 @@ Returns the angle from point `(x, y)` to `nodeid`.
 
 ```pawn
 native GetClosestMapNodeToPoint(Float:x, Float:y, Float:z, &MapNode:nodeid, MapNode:ignorednode = GPS_INVALID_MAP_NODE_ID, PathType:type = PATH_TYPE_VEHICLE);
-native GetClosestPedMapNodeToPoint(Float:x, Float:y, Float:z, &MapNode:nodeid, MapNode:ignorednode = GPS_INVALID_MAP_NODE_ID);
-native GetClosestBoatMapNodeToPoint(Float:x, Float:y, Float:z, &MapNode:nodeid, MapNode:ignorednode = GPS_INVALID_MAP_NODE_ID);
 ```
 Fast $O(1)$ spatial lookup that finds the nearest node of the requested type to a given point.
 
@@ -313,16 +311,12 @@ Dynamically excludes or restores a road segment in pathfinding computations.
 
 ```pawn
 native FindPath(MapNode:source, MapNode:target, &Path:pathid, PathType:type = PATH_TYPE_VEHICLE);
-native FindPedPath(MapNode:source, MapNode:target, &Path:pathid);
-native FindBoatPath(MapNode:source, MapNode:target, &Path:pathid);
 ```
 Computes an optimal path synchronously from `source` to `target`.
 
 ```pawn
 native FindPathThreaded(MapNode:source, MapNode:target, const callback[], const format[] = "", {Float, _}:...);
 native FindPathThreadedEx(MapNode:source, MapNode:target, PathType:type, const callback[], const format[] = "", {Float, _}:...);
-native FindPedPathThreaded(MapNode:source, MapNode:target, const callback[], const format[] = "", {Float, _}:...);
-native FindBoatPathThreaded(MapNode:source, MapNode:target, const callback[], const format[] = "", {Float, _}:...);
 ```
 Calculates pathfinding on a dedicated worker thread, notifying the specified Pawn callback with `(Path:pathid, ...)` upon completion without blocking the main server tick.
 

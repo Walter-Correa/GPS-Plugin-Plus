@@ -759,30 +759,6 @@ namespace Natives
 	}
 
 
-	cell AMX_NATIVE_CALL GetClosestPedMapNodeToPoint(AMX* amx, cell* params)
-	{
-		if (params[0] < (4 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 4 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
-
-		return FindClosestNodeInternal(amx, params, PATH_TYPE_PEDESTRIAN);
-	}
-
-
-	cell AMX_NATIVE_CALL GetClosestBoatMapNodeToPoint(AMX* amx, cell* params)
-	{
-		if (params[0] < (4 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 4 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
-
-		return FindClosestNodeInternal(amx, params, PATH_TYPE_BOAT);
-	}
-
-
 	cell AMX_NATIVE_CALL SaveMapNodesToFile(AMX* amx, cell* params)
 	{
 		CHECK_PARAMS(1);
@@ -847,22 +823,6 @@ namespace Natives
 		}
 
 		return FindPathInternalWrapper(amx, params, PATH_TYPE_VEHICLE);
-	}
-
-
-	cell AMX_NATIVE_CALL FindPedPath(AMX* amx, cell* params)
-	{
-		CHECK_PARAMS(3);
-
-		return FindPathInternalWrapper(amx, params, PATH_TYPE_PEDESTRIAN);
-	}
-
-
-	cell AMX_NATIVE_CALL FindBoatPath(AMX* amx, cell* params)
-	{
-		CHECK_PARAMS(3);
-
-		return FindPathInternalWrapper(amx, params, PATH_TYPE_BOAT);
 	}
 
 
@@ -932,30 +892,6 @@ namespace Natives
 		const auto type = static_cast<PathType>(params[3]);
 
 		return FindPathThreadedInternal(amx, params, type, 5);
-	}
-
-
-	cell AMX_NATIVE_CALL FindPedPathThreaded(AMX* amx, cell* params)
-	{
-		if (params[0] < (3 * 4))
-		{
-			std::cout << "FindPedPathThreaded: Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
-
-		return FindPathThreadedInternal(amx, params, PATH_TYPE_PEDESTRIAN, 4);
-	}
-
-
-	cell AMX_NATIVE_CALL FindBoatPathThreaded(AMX* amx, cell* params)
-	{
-		if (params[0] < (3 * 4))
-		{
-			std::cout << "FindBoatPathThreaded: Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
-
-		return FindPathThreadedInternal(amx, params, PATH_TYPE_BOAT, 4);
 	}
 
 
@@ -1593,9 +1529,6 @@ AMX_NATIVE_INFO PluginNatives[] =
 	{"GetMapNodeAngleFromPoint",		Natives::GetMapNodeAngleFromPoint},
 	{"GetClosestMapNodeToPoint",		Natives::GetClosestMapNodeToPoint},
 
-	{"GetClosestPedMapNodeToPoint",		Natives::GetClosestPedMapNodeToPoint},
-	{"GetClosestBoatMapNodeToPoint",	Natives::GetClosestBoatMapNodeToPoint},
-
 	{"GetHighestMapNodeID",				Natives::GetHighestMapNodeID},
 	{"GetRandomMapNode",				Natives::GetRandomMapNode},
 	{"GetRandomMapNodeFromArea",		Natives::GetRandomMapNodeFromArea},
@@ -1604,12 +1537,6 @@ AMX_NATIVE_INFO PluginNatives[] =
 	{"FindPath",						Natives::FindPath},
 	{"FindPathThreaded",				Natives::FindPathThreaded},
 	{"FindPathThreadedEx",				Natives::FindPathThreadedEx},
-
-	{"FindPedPath",						Natives::FindPedPath},
-	{"FindPedPathThreaded",				Natives::FindPedPathThreaded},
-
-	{"FindBoatPath",					Natives::FindBoatPath},
-	{"FindBoatPathThreaded",			Natives::FindBoatPathThreaded},
 
 	{"SaveMapNodesToFile",				Natives::SaveMapNodesToFile},
 
