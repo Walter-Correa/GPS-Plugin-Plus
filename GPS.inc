@@ -55,6 +55,13 @@ enum TurnDirection
     TURN_UTURN                      = 6
 }
 
+enum RoutePreference
+{
+    ROUTE_PREF_SHORTEST             = 0,
+    ROUTE_PREF_HIGHWAYS             = 1,
+    ROUTE_PREF_AVOID_HIGHWAYS       = 2
+}
+
 enum RoadPosition
 {
     ROAD_POS_CENTER                 = 0,
@@ -96,9 +103,10 @@ native GetRandomMapNodeFromArea(Float:minx, Float:miny, Float:maxx, Float:maxy, 
 
 native SaveMapNodesToFile(const filename[]);
 
-native FindPath(MapNode:source, MapNode:target, &Path:pathid, PathType:type = PATH_TYPE_VEHICLE);
+native FindPath(MapNode:source, MapNode:target, &Path:pathid, PathType:type = PATH_TYPE_VEHICLE, RoutePreference:pref = ROUTE_PREF_SHORTEST);
 native FindPathThreaded(MapNode:source, MapNode:target, const callback[], const format[] = "", {Float, _}:...);
-native FindPathThreadedEx(MapNode:source, MapNode:target, PathType:type, const callback[], const format[] = "", {Float, _}:...);
+native FindPathThreadedEx(MapNode:source, MapNode:target, PathType:type = PATH_TYPE_VEHICLE, RoutePreference:pref = ROUTE_PREF_SHORTEST, const callback[] = "", const format[] = "", {Float, _}:...);
+native FindMultiStopPath(const MapNode:stops[], stops_count, &Path:pathid, bool:optimize_order = false, PathType:type = PATH_TYPE_VEHICLE, RoutePreference:pref = ROUTE_PREF_SHORTEST);
 
 native bool:IsValidPath(Path:pathid);
 native GetPathSize(Path:pathid, &size);
@@ -120,6 +128,14 @@ native IsPointAgainstTraffic(Float:x, Float:y, Float:z, Float:facing_angle, &boo
 
 native GetPathTurnDirection(Path:pathid, index, &TurnDirection:turn, &Float:turn_angle);
 native GetPathEstimatedTravelTime(Path:pathid, Float:average_speed_kmh, &Float:seconds);
+
+native GetPathProgress(Path:pathid, Float:x, Float:y, Float:z, &current_step, &Float:distance_to_path, &bool:off_route, Float:max_distance_threshold = 25.0);
+native GetPathRemainingInfo(Path:pathid, current_step, &Float:remaining_distance, &Float:remaining_seconds, Float:speed_kmh = 60.0);
+native GetPathNextManeuver(Path:pathid, Float:x, Float:y, Float:z, &TurnDirection:turn, &Float:distance_to_turn);
+native GetSimplifiedPathNodes(Path:pathid, Float:tolerance_meters, MapNode:output_nodes[], max_nodes = sizeof(output_nodes), &nodes_count);
+
+native bool:IsMapNodeIntersection(MapNode:nodeid, &connection_count = 0);
+native GetMapNodeConnectionTarget(MapNode:nodeid, index, &MapNode:target_nodeid);
 
 
 #if defined _PawnPlus_included

@@ -799,7 +799,13 @@ namespace Natives
 			type = static_cast<PathType>(params[4]);
 		}
 
-		const auto result = Pathfinder::FindPath(start, target, type);
+		auto pref = ROUTE_PREF_SHORTEST;
+		if (params[0] >= (5 * 4))
+		{
+			pref = static_cast<RoutePreference>(params[5]);
+		}
+
+		const auto result = Pathfinder::FindPath(start, target, type, pref);
 
 		if (result == -1)
 		{
@@ -826,7 +832,70 @@ namespace Natives
 	}
 
 
-	static cell FindPathThreadedInternal(AMX* amx, cell* params, PathType type, int format_param_index)
+	cell AMX_NATIVE_CALL FindMultiStopPath(AMX* amx, cell* params)
+	{
+		if (params[0] < (3 * 4))
+		{
+			std::cout << __func__ << ": Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		cell* stops_addr = nullptr;
+		amx_GetAddr(amx, params[1], &stops_addr);
+		const auto count = static_cast<int>(params[2]);
+
+		if (count < 2 || stops_addr == nullptr)
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		bool optimize_order = false;
+		if (params[0] >= (4 * 4))
+		{
+			optimize_order = params[4] != 0;
+		}
+
+		auto type = PATH_TYPE_VEHICLE;
+		if (params[0] >= (5 * 4))
+		{
+			type = static_cast<PathType>(params[5]);
+		}
+
+		auto pref = ROUTE_PREF_SHORTEST;
+		if (params[0] >= (6 * 4))
+		{
+			pref = static_cast<RoutePreference>(params[6]);
+		}
+
+		std::vector<Node*> stop_nodes;
+		stop_nodes.reserve(count);
+
+		for (int i = 0; i < count; ++i)
+		{
+			const int node_id = static_cast<int>(stops_addr[i]);
+			Node* node = Container::Nodes::Find(node_id);
+			if (node == nullptr || node->isBlocked() || node->isSetForDeletion())
+			{
+				return GPS_ERROR_INVALID_NODE;
+			}
+			stop_nodes.push_back(node);
+		}
+
+		const int path_id = Pathfinder::FindMultiStopPath(stop_nodes, optimize_order, type, pref);
+		if (path_id == INVALID_PATH_ID)
+		{
+			return GPS_ERROR_INVALID_PATH;
+		}
+
+		cell* out_addr = nullptr;
+		amx_GetAddr(amx, params[3], &out_addr);
+		*out_addr = path_id;
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	static cell FindPathThreadedInternal(AMX* amx, cell* params, PathType type, RoutePreference pref, int format_param_index)
 	{
 		const auto start_id = static_cast<int>(params[1]);
 		auto start = Container::Nodes::Find(start_id);
@@ -856,7 +925,7 @@ namespace Natives
 
 		try
 		{
-			std::thread t(Pathfinder::FindPathThreaded, start, target, callback, type);
+			std::thread t(Pathfinder::FindPathThreaded, start, target, callback, type, pref);
 			t.detach();
 		}
 		catch (std::exception &e)
@@ -877,7 +946,7 @@ namespace Natives
 			return GPS_ERROR_INVALID_PARAMS;
 		}
 
-		return FindPathThreadedInternal(amx, params, PATH_TYPE_VEHICLE, 4);
+		return FindPathThreadedInternal(amx, params, PATH_TYPE_VEHICLE, ROUTE_PREF_SHORTEST, 4);
 	}
 
 
@@ -891,7 +960,13 @@ namespace Natives
 
 		const auto type = static_cast<PathType>(params[3]);
 
-		return FindPathThreadedInternal(amx, params, type, 5);
+		if (params[0] >= (5 * 4) && params[4] >= 0 && params[4] <= 2)
+		{
+			const auto pref = static_cast<RoutePreference>(params[4]);
+			return FindPathThreadedInternal(amx, params, type, pref, 6);
+		}
+
+		return FindPathThreadedInternal(amx, params, type, ROUTE_PREF_SHORTEST, 5);
 	}
 
 
@@ -1498,6 +1573,491 @@ namespace Natives
 
 		return GPS_ERROR_NONE;
 	}
+
+
+	cell AMX_NATIVE_CALL GetPathProgress(AMX* amx, cell* params)
+	{
+		if (params[0] < (7 * 4))
+		{
+			std::cout << __func__ << ": Expecting at least 7 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		const auto path_id = static_cast<int>(params[1]);
+		const auto path = Container::Paths::Find(path_id);
+		if (path == nullptr)
+		{
+			return GPS_ERROR_INVALID_PATH;
+		}
+
+		const float px = amx_ctof(params[2]);
+		const float py = amx_ctof(params[3]);
+		const float pz = amx_ctof(params[4]);
+
+		float threshold = 25.0f;
+		if (params[0] >= (8 * 4))
+		{
+			threshold = amx_ctof(params[8]);
+		}
+
+		const auto& nodes = path->getNodes();
+		const int count = static_cast<int>(nodes.size());
+
+		if (count == 0)
+		{
+			return GPS_ERROR_INVALID_PATH;
+		}
+
+		int best_step = 0;
+		float min_dist_sq = std::numeric_limits<float>::infinity();
+
+		if (count == 1)
+		{
+			const float dx = px - nodes[0]->getX();
+			const float dy = py - nodes[0]->getY();
+			const float dz = pz - nodes[0]->getZ();
+			min_dist_sq = dx * dx + dy * dy + dz * dz;
+			best_step = 0;
+		}
+		else
+		{
+			for (int i = 0; i < count - 1; ++i)
+			{
+				const float ax = nodes[i]->getX();
+				const float ay = nodes[i]->getY();
+				const float az = nodes[i]->getZ();
+
+				const float bx = nodes[i + 1]->getX();
+				const float by = nodes[i + 1]->getY();
+				const float bz = nodes[i + 1]->getZ();
+
+				const float abx = bx - ax;
+				const float aby = by - ay;
+				const float abz = bz - az;
+
+				const float apx = px - ax;
+				const float apy = py - ay;
+				const float apz = pz - az;
+
+				const float ab_len_sq = abx * abx + aby * aby + abz * abz;
+				float t = 0.0f;
+				if (ab_len_sq > 0.0001f)
+				{
+					t = (apx * abx + apy * aby + apz * abz) / ab_len_sq;
+					t = std::max(0.0f, std::min(1.0f, t));
+				}
+
+				const float qx = ax + t * abx;
+				const float qy = ay + t * aby;
+				const float qz = az + t * abz;
+
+				const float d_sq = (px - qx) * (px - qx) + (py - qy) * (py - qy) + (pz - qz) * (pz - qz);
+				if (d_sq < min_dist_sq)
+				{
+					min_dist_sq = d_sq;
+					best_step = (t > 0.6f) ? (i + 1) : i;
+				}
+			}
+		}
+
+		const float distance_to_path = std::sqrt(min_dist_sq);
+		const bool off_route = (distance_to_path > threshold);
+
+		cell* addr = nullptr;
+		amx_GetAddr(amx, params[5], &addr);
+		*addr = best_step;
+
+		amx_GetAddr(amx, params[6], &addr);
+		*addr = amx_ftoc(distance_to_path);
+
+		amx_GetAddr(amx, params[7], &addr);
+		*addr = off_route ? 1 : 0;
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL GetPathRemainingInfo(AMX* amx, cell* params)
+	{
+		if (params[0] < (4 * 4))
+		{
+			std::cout << __func__ << ": Expecting at least 4 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		const auto path_id = static_cast<int>(params[1]);
+		const auto path = Container::Paths::Find(path_id);
+		if (path == nullptr)
+		{
+			return GPS_ERROR_INVALID_PATH;
+		}
+
+		const auto current_step = static_cast<int>(params[2]);
+		const auto& nodes = path->getNodes();
+		const int count = static_cast<int>(nodes.size());
+
+		float speed_kmh = 60.0f;
+		if (params[0] >= (5 * 4))
+		{
+			speed_kmh = amx_ctof(params[5]);
+			if (speed_kmh <= 0.1f)
+			{
+				speed_kmh = 60.0f;
+			}
+		}
+
+		float remaining_dist = 0.0f;
+		if (current_step >= 0 && current_step < count - 1)
+		{
+			for (int i = current_step; i < count - 1; ++i)
+			{
+				remaining_dist += nodes[i]->getDistanceFromNode(nodes[i + 1]);
+			}
+		}
+
+		const float speed_mps = (speed_kmh * 1000.0f) / 3600.0f;
+		const float remaining_sec = remaining_dist / speed_mps;
+
+		cell* addr = nullptr;
+		amx_GetAddr(amx, params[3], &addr);
+		*addr = amx_ftoc(remaining_dist);
+
+		amx_GetAddr(amx, params[4], &addr);
+		*addr = amx_ftoc(remaining_sec);
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL GetPathNextManeuver(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(6);
+
+		const auto path_id = static_cast<int>(params[1]);
+		const auto path = Container::Paths::Find(path_id);
+		if (path == nullptr)
+		{
+			return GPS_ERROR_INVALID_PATH;
+		}
+
+		const float px = amx_ctof(params[2]);
+		const float py = amx_ctof(params[3]);
+		const float pz = amx_ctof(params[4]);
+
+		const auto& nodes = path->getNodes();
+		const int count = static_cast<int>(nodes.size());
+
+		if (count < 3)
+		{
+			const float zero = 0.0f;
+			cell* addr = nullptr;
+			amx_GetAddr(amx, params[5], &addr);
+			*addr = TURN_NONE;
+			amx_GetAddr(amx, params[6], &addr);
+			*addr = amx_ftoc(zero);
+			return GPS_ERROR_NONE;
+		}
+
+		int current_step = 0;
+		float min_dist_sq = std::numeric_limits<float>::infinity();
+
+		for (int i = 0; i < count - 1; ++i)
+		{
+			const float ax = nodes[i]->getX();
+			const float ay = nodes[i]->getY();
+			const float az = nodes[i]->getZ();
+
+			const float bx = nodes[i + 1]->getX();
+			const float by = nodes[i + 1]->getY();
+			const float bz = nodes[i + 1]->getZ();
+
+			const float abx = bx - ax;
+			const float aby = by - ay;
+			const float abz = bz - az;
+
+			const float apx = px - ax;
+			const float apy = py - ay;
+			const float apz = pz - az;
+
+			const float ab_len_sq = abx * abx + aby * aby + abz * abz;
+			float t = 0.0f;
+			if (ab_len_sq > 0.0001f)
+			{
+				t = (apx * abx + apy * aby + apz * abz) / ab_len_sq;
+				t = std::max(0.0f, std::min(1.0f, t));
+			}
+
+			const float qx = ax + t * abx;
+			const float qy = ay + t * aby;
+			const float qz = az + t * abz;
+
+			const float d_sq = (px - qx) * (px - qx) + (py - qy) * (py - qy) + (pz - qz) * (pz - qz);
+			if (d_sq < min_dist_sq)
+			{
+				min_dist_sq = d_sq;
+				current_step = (t > 0.6f) ? (i + 1) : i;
+			}
+		}
+
+		TurnDirection next_turn = TURN_NONE;
+		int turn_node_idx = -1;
+
+		for (int i = std::max(1, current_step + 1); i < count - 1; ++i)
+		{
+			const auto prev = nodes[i - 1];
+			const auto curr = nodes[i];
+			const auto next = nodes[i + 1];
+
+			const float angle1 = prev->getAngleFromNode(curr, true);
+			const float angle2 = curr->getAngleFromNode(next, true);
+
+			float diff = angle2 - angle1;
+			while (diff > 180.0f) diff -= 360.0f;
+			while (diff <= -180.0f) diff += 360.0f;
+
+			const float turn_angle = -diff;
+			const float abs_angle = std::abs(turn_angle);
+
+			if (abs_angle >= 160.0f)
+			{
+				next_turn = TURN_UTURN;
+				turn_node_idx = i;
+				break;
+			}
+			else if (turn_angle > 120.0f)
+			{
+				next_turn = TURN_SHARP_RIGHT;
+				turn_node_idx = i;
+				break;
+			}
+			else if (turn_angle > 20.0f)
+			{
+				next_turn = TURN_RIGHT;
+				turn_node_idx = i;
+				break;
+			}
+			else if (turn_angle < -120.0f)
+			{
+				next_turn = TURN_SHARP_LEFT;
+				turn_node_idx = i;
+				break;
+			}
+			else if (turn_angle < -20.0f)
+			{
+				next_turn = TURN_LEFT;
+				turn_node_idx = i;
+				break;
+			}
+		}
+
+		float dist_to_turn = 0.0f;
+		if (turn_node_idx != -1)
+		{
+			dist_to_turn = std::sqrt(min_dist_sq);
+			for (int i = current_step; i < turn_node_idx; ++i)
+			{
+				dist_to_turn += nodes[i]->getDistanceFromNode(nodes[i + 1]);
+			}
+		}
+
+		cell* addr = nullptr;
+		amx_GetAddr(amx, params[5], &addr);
+		*addr = next_turn;
+
+		amx_GetAddr(amx, params[6], &addr);
+		*addr = amx_ftoc(dist_to_turn);
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	static void DouglasPeuckerRecursive(const std::deque<Node*>& nodes, int first, int last, float epsilon, std::vector<bool>& keep)
+	{
+		if (last <= first + 1)
+		{
+			return;
+		}
+
+		float max_dist = 0.0f;
+		int index = first;
+
+		const float ax = nodes[first]->getX();
+		const float ay = nodes[first]->getY();
+		const float bx = nodes[last]->getX();
+		const float by = nodes[last]->getY();
+
+		const float dx = bx - ax;
+		const float dy = by - ay;
+		const float line_len_sq = dx * dx + dy * dy;
+
+		for (int i = first + 1; i < last; ++i)
+		{
+			float dist = 0.0f;
+			const float px = nodes[i]->getX();
+			const float py = nodes[i]->getY();
+
+			if (line_len_sq < 0.0001f)
+			{
+				dist = nodes[i]->getDistanceFromNode(nodes[first]);
+			}
+			else
+			{
+				const float cross = std::abs((px - ax) * dy - (py - ay) * dx);
+				dist = cross / std::sqrt(line_len_sq);
+			}
+
+			if (dist > max_dist)
+			{
+				max_dist = dist;
+				index = i;
+			}
+		}
+
+		if (max_dist > epsilon)
+		{
+			keep[index] = true;
+			DouglasPeuckerRecursive(nodes, first, index, epsilon, keep);
+			DouglasPeuckerRecursive(nodes, index, last, epsilon, keep);
+		}
+	}
+
+
+	cell AMX_NATIVE_CALL GetSimplifiedPathNodes(AMX* amx, cell* params)
+	{
+		if (params[0] < (5 * 4))
+		{
+			std::cout << __func__ << ": Expecting at least 5 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		const auto path_id = static_cast<int>(params[1]);
+		const auto path = Container::Paths::Find(path_id);
+		if (path == nullptr)
+		{
+			return GPS_ERROR_INVALID_PATH;
+		}
+
+		const float tolerance = amx_ctof(params[2]);
+		cell* out_array = nullptr;
+		amx_GetAddr(amx, params[3], &out_array);
+		const auto max_nodes = static_cast<int>(params[4]);
+
+		if (out_array == nullptr || max_nodes <= 0)
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		const auto& nodes = path->getNodes();
+		const int count = static_cast<int>(nodes.size());
+
+		if (count == 0)
+		{
+			cell* count_addr = nullptr;
+			amx_GetAddr(amx, params[5], &count_addr);
+			*count_addr = 0;
+			return GPS_ERROR_NONE;
+		}
+
+		std::vector<int> kept_node_ids;
+		if (count <= 2 || tolerance <= 0.0f)
+		{
+			for (int i = 0; i < std::min(count, max_nodes); ++i)
+			{
+				kept_node_ids.push_back(nodes[i]->getID());
+			}
+		}
+		else
+		{
+			std::vector<bool> keep(count, false);
+			keep[0] = true;
+			keep[count - 1] = true;
+
+			DouglasPeuckerRecursive(nodes, 0, count - 1, tolerance, keep);
+
+			for (int i = 0; i < count; ++i)
+			{
+				if (keep[i])
+				{
+					kept_node_ids.push_back(nodes[i]->getID());
+					if (static_cast<int>(kept_node_ids.size()) >= max_nodes)
+					{
+						break;
+					}
+				}
+			}
+		}
+
+		for (size_t i = 0; i < kept_node_ids.size(); ++i)
+		{
+			out_array[i] = kept_node_ids[i];
+		}
+
+		cell* count_addr = nullptr;
+		amx_GetAddr(amx, params[5], &count_addr);
+		*count_addr = static_cast<cell>(kept_node_ids.size());
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL IsMapNodeIntersection(AMX* amx, cell* params)
+	{
+		if (params[0] < (1 * 4))
+		{
+			std::cout << __func__ << ": Expecting at least 1 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return false;
+		}
+
+		const auto id = static_cast<int>(params[1]);
+		const auto node = Container::Nodes::Find(id);
+		if (node == nullptr)
+		{
+			return false;
+		}
+
+		const auto conn_count = static_cast<int>(node->getConnections().size());
+
+		if (params[0] >= (2 * 4))
+		{
+			cell* addr = nullptr;
+			amx_GetAddr(amx, params[2], &addr);
+			*addr = conn_count;
+		}
+
+		return (conn_count >= 3) ? 1 : 0;
+	}
+
+
+	cell AMX_NATIVE_CALL GetMapNodeConnectionTarget(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(3);
+
+		const auto id = static_cast<int>(params[1]);
+		const auto node = Container::Nodes::Find(id);
+		if (node == nullptr)
+		{
+			return GPS_ERROR_INVALID_NODE;
+		}
+
+		const auto index = static_cast<size_t>(params[2]);
+		const auto& conns = node->getConnections();
+		if (index >= conns.size())
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		const auto target = conns[index]->getTarget();
+		if (target == nullptr)
+		{
+			return GPS_ERROR_INTERNAL;
+		}
+
+		cell* addr = nullptr;
+		amx_GetAddr(amx, params[3], &addr);
+		*addr = target->getID();
+
+		return GPS_ERROR_NONE;
+	}
 }
 
 AMX_NATIVE_INFO PluginNatives[] =
@@ -1537,6 +2097,7 @@ AMX_NATIVE_INFO PluginNatives[] =
 	{"FindPath",						Natives::FindPath},
 	{"FindPathThreaded",				Natives::FindPathThreaded},
 	{"FindPathThreadedEx",				Natives::FindPathThreadedEx},
+	{"FindMultiStopPath",				Natives::FindMultiStopPath},
 
 	{"SaveMapNodesToFile",				Natives::SaveMapNodesToFile},
 
@@ -1559,6 +2120,13 @@ AMX_NATIVE_INFO PluginNatives[] =
 
 	{"GetPathTurnDirection",			Natives::GetPathTurnDirection},
 	{"GetPathEstimatedTravelTime",		Natives::GetPathEstimatedTravelTime},
+
+	{"GetPathProgress",					Natives::GetPathProgress},
+	{"GetPathRemainingInfo",			Natives::GetPathRemainingInfo},
+	{"GetPathNextManeuver",				Natives::GetPathNextManeuver},
+	{"GetSimplifiedPathNodes",			Natives::GetSimplifiedPathNodes},
+	{"IsMapNodeIntersection",			Natives::IsMapNodeIntersection},
+	{"GetMapNodeConnectionTarget",		Natives::GetMapNodeConnectionTarget},
 
 	{0, 0}
 };

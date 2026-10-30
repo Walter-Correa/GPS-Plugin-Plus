@@ -45,6 +45,13 @@ enum TurnDirection : uint8_t
 	TURN_UTURN = 6
 };
 
+enum RoutePreference : uint8_t
+{
+	ROUTE_PREF_SHORTEST = 0,
+	ROUTE_PREF_HIGHWAYS = 1,
+	ROUTE_PREF_AVOID_HIGHWAYS = 2
+};
+
 
 typedef void(*logprintf_t)(const char* format, ...);
 extern logprintf_t logprintf;

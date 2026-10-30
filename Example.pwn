@@ -239,6 +239,117 @@ DemonstrateSafeRandomNode(Float:minX, Float:minY, Float:maxX, Float:maxY)
 }
 
 // -----------------------------------------------------------------------------
+// Example 6: Real-Time HUD Tracking, Next Maneuver & Off-Route Rerouting
+// -----------------------------------------------------------------------------
+DemonstrateRealtimeNavigation(MapNode:startNode, MapNode:destNode)
+{
+    printf("\n--- [Demo 6: Real-Time HUD Tracking & Off-Route Detection] ---");
+
+    new Path:pathid;
+    if (FindPath(startNode, destNode, pathid) != GPS_ERROR_NONE || !IsValidPath(pathid))
+    {
+        return;
+    }
+
+    // Simulate vehicle position near starting area
+    new Float:vehicleX = 1540.0, Float:vehicleY = -1670.0, Float:vehicleZ = 13.5;
+
+    new currentStep;
+    new Float:distanceToPath;
+    new bool:offRoute;
+    GetPathProgress(pathid, vehicleX, vehicleY, vehicleZ, currentStep, distanceToPath, offRoute, 25.0);
+
+    new Float:remainingDist, Float:remainingSec;
+    GetPathRemainingInfo(pathid, currentStep, remainingDist, remainingSec, 60.0);
+
+    new TurnDirection:nextTurn;
+    new Float:distanceToTurn;
+    GetPathNextManeuver(pathid, vehicleX, vehicleY, vehicleZ, nextTurn, distanceToTurn);
+
+    printf("HUD: Step %d | Dist to Path: %.1fm | Off Route: %s | Remaining: %.1fm (ETA: %.1fs)",
+        currentStep, distanceToPath, offRoute ? ("YES (Recalculating...)") : ("NO"), remainingDist, remainingSec);
+    printf("Next Maneuver: %d at %.1f meters ahead", _:nextTurn, distanceToTurn);
+
+    DestroyPath(pathid);
+}
+
+// -----------------------------------------------------------------------------
+// Example 7: Multi-Stop Optimized Delivery Route (e.g. Courier / Trucking)
+// -----------------------------------------------------------------------------
+DemonstrateMultiStopDelivery(MapNode:hubNode, MapNode:dropA, MapNode:dropB, MapNode:dropC)
+{
+    printf("\n--- [Demo 7: Multi-Stop Optimized Delivery Route] ---");
+
+    new MapNode:stops[4];
+    stops[0] = hubNode;
+    stops[1] = dropA;
+    stops[2] = dropB;
+    stops[3] = dropC;
+
+    new Path:multiPath;
+    // optimize_order = true solves TSP to minimize overall driving distance
+    if (FindMultiStopPath(stops, sizeof(stops), multiPath, true, PATH_TYPE_VEHICLE, ROUTE_PREF_HIGHWAYS) == GPS_ERROR_NONE)
+    {
+        new size;
+        new Float:length;
+        GetPathSize(multiPath, size);
+        GetPathLength(multiPath, length);
+
+        printf("Multi-Stop route calculated successfully! Total nodes: %d | Combined Length: %.2f m",
+            size, length);
+        DestroyPath(multiPath);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Example 8: Douglas-Peucker Checkpoint Decimation (Saving Streamer Limits)
+// -----------------------------------------------------------------------------
+DemonstratePathSimplification(MapNode:startNode, MapNode:destNode)
+{
+    printf("\n--- [Demo 8: Douglas-Peucker Checkpoint Decimation] ---");
+
+    new Path:longPath;
+    if (FindPath(startNode, destNode, longPath) == GPS_ERROR_NONE && IsValidPath(longPath))
+    {
+        new originalCount;
+        GetPathSize(longPath, originalCount);
+
+        new MapNode:decimatedNodes[128];
+        new decimatedCount = 0;
+        // 10.0m tolerance preserves every corner and curve while eliminating straight highway redundancy
+        GetSimplifiedPathNodes(longPath, 10.0, decimatedNodes, sizeof(decimatedNodes), decimatedCount);
+
+        printf("Original Path Nodes: %d -> Simplified Checkpoints: %d (%.1f%% reduction!)",
+            originalCount, decimatedCount, 100.0 - ((float(decimatedCount) / float(originalCount)) * 100.0));
+
+        DestroyPath(longPath);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Example 9: Map Node Intersection & AI Road Choice
+// -----------------------------------------------------------------------------
+DemonstrateIntersectionDetection(MapNode:nodeid)
+{
+    printf("\n--- [Demo 9: Intersection Detection for NPC Traffic] ---");
+
+    new connCount;
+    new bool:isJunction = IsMapNodeIntersection(nodeid, connCount);
+
+    printf("Node %d is junction: %s (Total connected road branches: %d)",
+        _:nodeid, isJunction ? ("TRUE (3+ ways)") : ("FALSE"), connCount);
+
+    for (new i = 0; i < connCount; i++)
+    {
+        new MapNode:targetNode;
+        if (GetMapNodeConnectionTarget(nodeid, i, targetNode) == GPS_ERROR_NONE)
+        {
+            printf("  Branch %d leads to Node %d", i + 1, _:targetNode);
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Main Entry: Executes test suite
 // -----------------------------------------------------------------------------
 main()
@@ -259,6 +370,17 @@ main()
     {
         DemonstrateRoadblockDetour(nodeA, nodeB);
         DemonstrateThreadedRoute(nodeA, nodeB);
+        DemonstrateRealtimeNavigation(nodeA, nodeB);
+        DemonstratePathSimplification(nodeA, nodeB);
+        DemonstrateIntersectionDetection(nodeA);
+    }
+
+    new MapNode:nodeC, MapNode:nodeD;
+    GetClosestMapNodeToPoint(1000.0, -1500.0, 13.5, nodeC);
+    GetClosestMapNodeToPoint(2000.0, -1200.0, 20.0, nodeD);
+    if (IsValidMapNode(nodeA) && IsValidMapNode(nodeB) && IsValidMapNode(nodeC) && IsValidMapNode(nodeD))
+    {
+        DemonstrateMultiStopDelivery(nodeA, nodeC, nodeD, nodeB);
     }
 
     DemonstrateRoadSnappingAndParking(lsDowntownX, lsDowntownY, lsDowntownZ);

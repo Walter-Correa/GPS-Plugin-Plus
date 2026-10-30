@@ -14,6 +14,7 @@ public:
 	void addNodeToStart(Node* node);
 	void addNodeToEnd(Node* node);
 	float getLength() const;
+	void setLength(float length);
 	std::deque<Node*> getNodes() const;
 
 private:

@@ -33,6 +33,25 @@
 * **Turn-by-Turn Navigation & ETA:**
   * Calculate upcoming driving maneuvers (`TURN_STRAIGHT`, `TURN_RIGHT`, `TURN_LEFT`, `TURN_SHARP_RIGHT`, `TURN_SHARP_LEFT`, `TURN_UTURN`) and relative steering angles (`GetPathTurnDirection`).
   * Predict travel times based on target speed in km/h (`GetPathEstimatedTravelTime`).
+  * Look ahead for the next imminent maneuver along the path (`GetPathNextManeuver`).
+
+* **Real-Time GPS Tracking & Off-Route Rerouting:**
+  * Track a player's real-time step progress and perpendicular distance to the planned route (`GetPathProgress`).
+  * Automatically detect when a driver veers off-course to trigger seamless dynamic recalculations.
+  * Continuously compute remaining trip distance and ETA from the vehicle's current step (`GetPathRemainingInfo`).
+
+* **Multi-Stop Route Optimization (TSP):**
+  * Chain multiple waypoints into a single continuous path (`FindMultiStopPath`).
+  * Built-in Traveling Salesperson (TSP) heuristic automatically reorders intermediate stops to minimize overall driving distance — ideal for delivery, courier, and trucking jobs.
+
+* **Weighted Highway Routing:**
+  * Choose between shortest distance (`ROUTE_PREF_SHORTEST`), highway-prioritized routing (`ROUTE_PREF_HIGHWAYS`), or highway avoidance (`ROUTE_PREF_AVOID_HIGHWAYS`).
+
+* **Douglas-Peucker Checkpoint Decimation:**
+  * Prune redundant linear checkpoints along straight stretches with controllable tolerance (`GetSimplifiedPathNodes`), reducing streamer checkpoint loads by up to 90% while preserving every curve and junction.
+
+* **Intersection & Branch Detection:**
+  * Inspect road node connectivity (`IsMapNodeIntersection`, `GetMapNodeConnectionTarget`) to empower autonomous NPC traffic AI with realistic turning decisions.
 
 * **Wrong-Way Traffic Detection:**
   * Accurately detect if a vehicle is heading against the legal traffic flow (`IsPointAgainstTraffic`) on both one-way streets and multi-lane two-way roads.
@@ -147,6 +166,13 @@ Add the include file at the top of your script:
 | `ROAD_POS_CENTER` | `0` | Road centerline. |
 | `ROAD_POS_CURB` | `1` | Right-side curb/shoulder (`(road_width / 2.0) + 1.3m`). |
 | `ROAD_POS_EDGE` | `2` | Outer road boundary. |
+
+#### `RoutePreference`
+| Constant | Value | Description |
+| :--- | :---: | :--- |
+| `ROUTE_PREF_SHORTEST` | `0` | Shortest physical distance (in meters). |
+| `ROUTE_PREF_HIGHWAYS` | `1` | Prioritizes freeways and wide multi-lane boulevards over narrow streets. |
+| `ROUTE_PREF_AVOID_HIGHWAYS` | `2` | Avoids highways and expressways (useful for bicycles or pedestrian routes). |
 
 ---
 
@@ -310,15 +336,20 @@ Dynamically excludes or restores a road segment in pathfinding computations.
 #### Pathfinding
 
 ```pawn
-native FindPath(MapNode:source, MapNode:target, &Path:pathid, PathType:type = PATH_TYPE_VEHICLE);
+native FindPath(MapNode:source, MapNode:target, &Path:pathid, PathType:type = PATH_TYPE_VEHICLE, RoutePreference:pref = ROUTE_PREF_SHORTEST);
 ```
-Computes an optimal path synchronously from `source` to `target`.
+Computes an optimal path synchronously from `source` to `target`, taking into account roadway preferences (shortest vs highway-favored).
 
 ```pawn
 native FindPathThreaded(MapNode:source, MapNode:target, const callback[], const format[] = "", {Float, _}:...);
-native FindPathThreadedEx(MapNode:source, MapNode:target, PathType:type, const callback[], const format[] = "", {Float, _}:...);
+native FindPathThreadedEx(MapNode:source, MapNode:target, PathType:type = PATH_TYPE_VEHICLE, RoutePreference:pref = ROUTE_PREF_SHORTEST, const callback[] = "", const format[] = "", {Float, _}:...);
 ```
 Calculates pathfinding on a dedicated worker thread, notifying the specified Pawn callback with `(Path:pathid, ...)` upon completion without blocking the main server tick.
+
+```pawn
+native FindMultiStopPath(const MapNode:stops[], stops_count, &Path:pathid, bool:optimize_order = false, PathType:type = PATH_TYPE_VEHICLE, RoutePreference:pref = ROUTE_PREF_SHORTEST);
+```
+Combines multiple waypoints into a unified path. If `optimize_order` is `true`, runs a TSP nearest-neighbor algorithm to reorder intermediate stops and minimize total travel distance.
 
 ```pawn
 native Task:FindPathAsync(MapNode:source, MapNode:target);
@@ -327,18 +358,22 @@ Asynchronous pathfinding task for [PawnPlus](https://github.com/IllidanS4/PawnPl
 
 ---
 
-#### Path Inspection & Turn Navigation
+#### Real-Time Tracking & Turn Navigation
 
 ```pawn
-native bool:IsValidPath(Path:pathid);
-native GetPathSize(Path:pathid, &size);
-native GetPathLength(Path:pathid, &Float:length);
-native GetPathNode(Path:pathid, index, &MapNode:nodeid);
-native GetPathNodeIndex(Path:pathid, MapNode:nodeid, &index);
-native GetPathLaneNodePos(Path:pathid, index, lane_index, &Float:x, &Float:y, &Float:z);
-native DestroyPath(Path:pathid);
+native GetPathProgress(Path:pathid, Float:x, Float:y, Float:z, &current_step, &Float:distance_to_path, &bool:off_route, Float:max_distance_threshold = 25.0);
 ```
-Utilities to query node count, total distance in metres, individual node coordinates, and destroy path resources.
+Determines the driver's current progress along the path, perpendicular distance to the closest route segment, and flags if the player has deviated beyond `max_distance_threshold` to trigger an automatic recalculation.
+
+```pawn
+native GetPathRemainingInfo(Path:pathid, current_step, &Float:remaining_distance, &Float:remaining_seconds, Float:speed_kmh = 60.0);
+```
+Calculates remaining trip length in meters and estimated arrival time in seconds from `current_step` to destination.
+
+```pawn
+native GetPathNextManeuver(Path:pathid, Float:x, Float:y, Float:z, &TurnDirection:turn, &Float:distance_to_turn);
+```
+Looks ahead along the path to find the next imminent non-straight turn maneuver and the driving distance to reach it.
 
 ```pawn
 native GetPathTurnDirection(Path:pathid, index, &TurnDirection:turn, &Float:turn_angle);
@@ -348,7 +383,26 @@ Calculates turn-by-turn navigation maneuver (`TURN_STRAIGHT`, `TURN_RIGHT`, `TUR
 ```pawn
 native GetPathEstimatedTravelTime(Path:pathid, Float:average_speed_kmh, &Float:seconds);
 ```
-Calculates the estimated travel time in seconds for a path given an average speed in km/h.
+Calculates the estimated travel time in seconds for the entire path given an average speed in km/h.
+
+---
+
+#### Route Simplification & Intersections
+
+```pawn
+native GetSimplifiedPathNodes(Path:pathid, Float:tolerance_meters, MapNode:output_nodes[], max_nodes = sizeof(output_nodes), &nodes_count);
+```
+Applies the Ramer-Douglas-Peucker algorithm to eliminate redundant checkpoints on straightaways while retaining all corners, saving up to 90% of dynamic checkpoint slots.
+
+```pawn
+native bool:IsMapNodeIntersection(MapNode:nodeid, &connection_count = 0);
+```
+Returns `true` if a node has 3 or more roadway connections (T-junctions or crossroads).
+
+```pawn
+native GetMapNodeConnectionTarget(MapNode:nodeid, index, &MapNode:target_nodeid);
+```
+Directly queries the target node ID of a given connection index, simplifying random branch selection for NPC traffic scripts.
 
 ```pawn
 native SaveMapNodesToFile(const filename[]);

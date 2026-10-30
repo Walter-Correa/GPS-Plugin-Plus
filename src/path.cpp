@@ -38,6 +38,12 @@ float Path::getLength() const
 }
 
 
+void Path::setLength(const float length)
+{
+	length_ = length;
+}
+
+
 std::deque<Node*> Path::getNodes() const
 {
 	return nodes_;

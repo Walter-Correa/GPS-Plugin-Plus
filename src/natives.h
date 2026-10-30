@@ -61,6 +61,8 @@ namespace Natives
 	cell AMX_NATIVE_CALL FindPathThreaded(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL FindPathThreadedEx(AMX* amx, cell* params);
 
+	cell AMX_NATIVE_CALL FindMultiStopPath(AMX* amx, cell* params);
+
 	cell AMX_NATIVE_CALL IsValidPath(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL GetPathSize(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL GetPathLength(AMX* amx, cell* params);
@@ -81,6 +83,13 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL GetPathTurnDirection(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL GetPathEstimatedTravelTime(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL GetPathProgress(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetPathRemainingInfo(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetPathNextManeuver(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetSimplifiedPathNodes(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL IsMapNodeIntersection(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetMapNodeConnectionTarget(AMX* amx, cell* params);
 }
 
 extern AMX_NATIVE_INFO PluginNatives[];
