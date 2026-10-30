@@ -17,6 +17,8 @@ Connection::Connection(const int id, Node* source, Node* target, const float dis
 	one_way_ = one_way;
 	blocked_ = false;
 	traffic_multiplier_ = 1.0f;
+	has_toll_ = false;
+	toll_cost_ = 0;
 }
 
 
@@ -89,6 +91,25 @@ float Connection::getTrafficMultiplier() const
 void Connection::setTrafficMultiplier(const float multiplier)
 {
 	traffic_multiplier_ = (multiplier < 0.01f) ? 0.01f : multiplier;
+}
+
+
+bool Connection::hasToll() const
+{
+	return has_toll_;
+}
+
+
+void Connection::setToll(const bool has_toll, const int cost)
+{
+	has_toll_ = has_toll;
+	toll_cost_ = cost;
+}
+
+
+int Connection::getTollCost() const
+{
+	return toll_cost_;
 }
 
 

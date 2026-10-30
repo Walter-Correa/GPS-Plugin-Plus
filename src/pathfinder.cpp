@@ -39,7 +39,7 @@ namespace Pathfinder
 	};
 
 
-	Path* FindPathInternal(Node* start, Node* target, const PathType type, const RoutePreference pref, const VehicleCategory cat)
+	Path* FindPathInternal(Node* start, Node* target, const PathType type, const RoutePreference pref, const VehicleCategory cat, const float danger_penalty, const float max_slope_gradient, const bool avoid_tolls, const bool evasive)
 	{
 		if (start == nullptr || target == nullptr || start->isBlocked() || target->isBlocked())
 		{
@@ -97,6 +97,15 @@ namespace Pathfinder
 					continue;
 				}
 
+				// Evasive routing (tactical anti-dead-end)
+				if ((evasive || pref == ROUTE_PREF_EVASIVE) && connection_target != target)
+				{
+					if (IsMapNodeDeadEnd(connection_target))
+					{
+						continue;
+					}
+				}
+
 				auto next_node = &existing_paths.at(connection_target->getID());
 				const auto edge_dist = connection->getDistance();
 
@@ -119,6 +128,58 @@ namespace Pathfinder
 				if (cat == VEHICLE_CAT_MOTORCYCLE && connection->getRoadWidth() < 6.0f)
 				{
 					weight_factor *= 0.8f;
+				}
+
+				// Avoid Tolls
+				if ((avoid_tolls || pref == ROUTE_PREF_AVOID_TOLLS) && connection->hasToll())
+				{
+					weight_factor *= 15.0f;
+				}
+
+				// Evasive preferences
+				if (evasive || pref == ROUTE_PREF_EVASIVE)
+				{
+					if ((connection_target->getFlags() & NODE_FLAG_HIGHWAY) != 0 || connection->getRightLanes() >= 2)
+					{
+						weight_factor *= 2.5f;
+					}
+					if (connection->getRoadWidth() < 6.5f)
+					{
+						weight_factor *= 0.65f;
+					}
+					if (connection_target->getConnections().size() >= 3)
+					{
+						weight_factor *= 0.85f;
+					}
+				}
+
+				// Eco slope penalty
+				if (max_slope_gradient > 0.0f || pref == ROUTE_PREF_ECO)
+				{
+					const float threshold = (max_slope_gradient > 0.0f) ? max_slope_gradient : 0.12f;
+					const float dz = connection_target->getZ() - current_node->node->getZ();
+					const float dx = connection_target->getX() - current_node->node->getX();
+					const float dy = connection_target->getY() - current_node->node->getY();
+					const float horiz = std::sqrt(dx * dx + dy * dy);
+					if (dz > 0.0f && horiz > 0.1f)
+					{
+						const float slope = dz / horiz;
+						if (slope > threshold)
+						{
+							weight_factor *= (1.0f + (slope - threshold) * 25.0f);
+						}
+					}
+				}
+
+				// Danger / crime area penalty
+				if (danger_penalty > 0.0f || pref == ROUTE_PREF_SAFEST)
+				{
+					const float penalty = (danger_penalty > 0.0f) ? danger_penalty : 5.0f;
+					const float danger = connection_target->getDangerWeight();
+					if (danger > 0.0f)
+					{
+						weight_factor *= (1.0f + danger * penalty);
+					}
 				}
 
 				const float traffic_mult = connection->getTrafficMultiplier();
@@ -490,5 +551,363 @@ namespace Pathfinder
 		}
 
 		return reachable_ids;
+	}
+
+
+	bool IsMapNodeDeadEnd(Node* node)
+	{
+		if (node == nullptr) return true;
+		const auto& conns = node->getConnections();
+		int active_out = 0;
+		for (auto c : conns)
+		{
+			if (c != nullptr && !c->isBlocked())
+			{
+				auto tgt = c->getTarget();
+				if (tgt != nullptr && tgt != node && !tgt->isBlocked())
+				{
+					active_out++;
+				}
+			}
+		}
+		return active_out <= 1;
+	}
+
+
+	int FindSafePath(Node* start, Node* target, float danger_penalty, const PathType type, const RoutePreference pref)
+	{
+		try
+		{
+			Container::LockShared();
+			const auto path = FindPathInternal(start, target, type, pref, VEHICLE_CAT_STANDARD, danger_penalty, 0.0f, false, false);
+			Container::UnlockShared();
+
+			Container::LockExclusive();
+			const auto result = Container::Paths::Add(path);
+			Container::UnlockExclusive();
+
+			return result;
+		}
+		catch (const PathNotFoundException &e)
+		{
+			Container::UnlockShared();
+			return INVALID_PATH_ID;
+		}
+	}
+
+
+	int FindEcoPath(Node* start, Node* target, float max_slope_gradient, const PathType type)
+	{
+		try
+		{
+			Container::LockShared();
+			const auto path = FindPathInternal(start, target, type, ROUTE_PREF_ECO, VEHICLE_CAT_STANDARD, 0.0f, max_slope_gradient, false, false);
+			Container::UnlockShared();
+
+			Container::LockExclusive();
+			const auto result = Container::Paths::Add(path);
+			Container::UnlockExclusive();
+
+			return result;
+		}
+		catch (const PathNotFoundException &e)
+		{
+			Container::UnlockShared();
+			return INVALID_PATH_ID;
+		}
+	}
+
+
+	int FindEvasivePath(Node* start, Node* target, const PathType type)
+	{
+		try
+		{
+			Container::LockShared();
+			const auto path = FindPathInternal(start, target, type, ROUTE_PREF_EVASIVE, VEHICLE_CAT_STANDARD, 0.0f, 0.0f, false, true);
+			Container::UnlockShared();
+
+			Container::LockExclusive();
+			const auto result = Container::Paths::Add(path);
+			Container::UnlockExclusive();
+
+			return result;
+		}
+		catch (const PathNotFoundException &e)
+		{
+			Container::UnlockShared();
+			return INVALID_PATH_ID;
+		}
+	}
+
+
+	int FindPathAvoidTolls(Node* start, Node* target, const PathType type, const RoutePreference pref)
+	{
+		try
+		{
+			Container::LockShared();
+			const auto path = FindPathInternal(start, target, type, pref, VEHICLE_CAT_STANDARD, 0.0f, 0.0f, true, false);
+			Container::UnlockShared();
+
+			Container::LockExclusive();
+			const auto result = Container::Paths::Add(path);
+			Container::UnlockExclusive();
+
+			return result;
+		}
+		catch (const PathNotFoundException &e)
+		{
+			Container::UnlockShared();
+			return INVALID_PATH_ID;
+		}
+	}
+
+
+	int FindNearestPointByRoad(float from_x, float from_y, float from_z, const std::vector<std::tuple<float, float, float>>& destinations, int& out_nearest_index, float& out_road_distance, int& out_path_id, PathType type)
+	{
+		out_nearest_index = -1;
+		out_road_distance = infinity;
+		out_path_id = INVALID_PATH_ID;
+
+		if (destinations.empty()) return -1;
+
+		Container::LockShared();
+		Node* start = Container::Nodes::FindClosest(from_x, from_y, from_z, type);
+		if (start == nullptr || start->isBlocked())
+		{
+			Container::UnlockShared();
+			return -1;
+		}
+
+		std::unordered_map<int, std::vector<int>> target_node_map;
+		for (size_t i = 0; i < destinations.size(); ++i)
+		{
+			Node* dest_node = Container::Nodes::FindClosest(std::get<0>(destinations[i]), std::get<1>(destinations[i]), std::get<2>(destinations[i]), type);
+			if (dest_node != nullptr)
+			{
+				target_node_map[dest_node->getID()].push_back(static_cast<int>(i));
+			}
+		}
+
+		if (target_node_map.empty())
+		{
+			Container::UnlockShared();
+			return -1;
+		}
+
+		std::priority_queue<VisitedNode*, std::vector<VisitedNode*>, std::function<bool(VisitedNode*, VisitedNode*)>> queue(NodeComparator);
+		std::vector<VisitedNode> existing_paths(Container::Nodes::GetHighestID() + 1);
+
+		const auto first_node = &existing_paths.at(start->getID());
+		first_node->distance = 0.0f;
+		first_node->total_distance = 0.0f;
+		first_node->node = start;
+		queue.push(first_node);
+
+		VisitedNode* solution = nullptr;
+		int matched_dest_idx = -1;
+		float best_total_dist = infinity;
+
+		while (!queue.empty())
+		{
+			const auto current = queue.top();
+			queue.pop();
+
+			if (current->distance > best_total_dist)
+			{
+				break;
+			}
+
+			auto it = target_node_map.find(current->node->getID());
+			if (it != target_node_map.end())
+			{
+				for (int d_idx : it->second)
+				{
+					const auto& pt = destinations[d_idx];
+					const float direct_to_dest = current->node->getDistanceFromPoint(std::get<0>(pt), std::get<1>(pt), std::get<2>(pt));
+					const float full_road_dist = current->distance + start->getDistanceFromPoint(from_x, from_y, from_z) + direct_to_dest;
+
+					if (full_road_dist < best_total_dist)
+					{
+						best_total_dist = full_road_dist;
+						matched_dest_idx = d_idx;
+						solution = current;
+					}
+				}
+			}
+
+			for (auto connection : current->node->getConnections())
+			{
+				if (connection->isBlocked()) continue;
+				auto target = connection->getTarget();
+				if (target == nullptr || target == current->node || target->isSetForDeletion() || target->isBlocked() || target->getType() != type) continue;
+
+				auto next_node = &existing_paths.at(target->getID());
+				const float cost = connection->getDistance() * connection->getTrafficMultiplier();
+				const float distance = current->distance + cost;
+
+				if (next_node->distance > distance)
+				{
+					next_node->node = target;
+					next_node->distance = distance;
+					next_node->previous = current;
+					next_node->total_distance = distance;
+					queue.push(next_node);
+				}
+			}
+		}
+
+		Container::UnlockShared();
+
+		if (solution == nullptr || matched_dest_idx == -1)
+		{
+			return -1;
+		}
+
+		out_nearest_index = matched_dest_idx;
+		out_road_distance = best_total_dist;
+
+		auto result_path = new Path(0.0f);
+		auto curr = solution;
+		while (curr != nullptr)
+		{
+			result_path->addNodeToStart(curr->node);
+			curr = curr->previous;
+		}
+
+		float actual_length = 0.0f;
+		const auto& pnodes = result_path->getNodes();
+		for (size_t i = 1; i < pnodes.size(); ++i)
+		{
+			actual_length += pnodes[i - 1]->getDistanceFromNode(pnodes[i]);
+		}
+		result_path->setLength(actual_length);
+
+		int idx = 0;
+		for (auto n : result_path->getNodes())
+		{
+			n->addToPath(result_path, idx++);
+		}
+
+		Container::LockExclusive();
+		out_path_id = Container::Paths::Add(result_path);
+		Container::UnlockExclusive();
+
+		return 0;
+	}
+
+
+	bool GetPathElevationStats(Path* path, float& out_min_z, float& out_max_z, float& out_total_climb, float& out_max_incline_percent)
+	{
+		out_min_z = 0.0f;
+		out_max_z = 0.0f;
+		out_total_climb = 0.0f;
+		out_max_incline_percent = 0.0f;
+
+		if (path == nullptr) return false;
+
+		const auto& nodes = path->getNodes();
+		if (nodes.empty()) return false;
+
+		out_min_z = nodes[0]->getZ();
+		out_max_z = nodes[0]->getZ();
+
+		for (size_t i = 1; i < nodes.size(); ++i)
+		{
+			const float prev_z = nodes[i - 1]->getZ();
+			const float curr_z = nodes[i]->getZ();
+
+			out_min_z = std::min(out_min_z, curr_z);
+			out_max_z = std::max(out_max_z, curr_z);
+
+			const float dz = curr_z - prev_z;
+			if (dz > 0.0f)
+			{
+				out_total_climb += dz;
+				const float dx = nodes[i]->getX() - nodes[i - 1]->getX();
+				const float dy = nodes[i]->getY() - nodes[i - 1]->getY();
+				const float horiz = std::sqrt(dx * dx + dy * dy);
+				if (horiz > 0.1f)
+				{
+					const float incline = (dz / horiz) * 100.0f;
+					out_max_incline_percent = std::max(out_max_incline_percent, incline);
+				}
+			}
+		}
+
+		return true;
+	}
+
+
+	bool GetPathOffsetPosition(Path* path, float distance_along_path, float lateral_offset, float& out_x, float& out_y, float& out_z, float& out_angle)
+	{
+		out_x = 0.0f;
+		out_y = 0.0f;
+		out_z = 0.0f;
+		out_angle = 0.0f;
+
+		if (path == nullptr) return false;
+
+		const auto& nodes = path->getNodes();
+		if (nodes.empty()) return false;
+
+		if (nodes.size() == 1)
+		{
+			out_x = nodes[0]->getX();
+			out_y = nodes[0]->getY();
+			out_z = nodes[0]->getZ();
+			out_angle = 0.0f;
+			return true;
+		}
+
+		float accum_dist = 0.0f;
+		for (size_t i = 0; i < nodes.size() - 1; ++i)
+		{
+			const float seg_len = nodes[i]->getDistanceFromNode(nodes[i + 1]);
+			if (distance_along_path <= accum_dist + seg_len || i == nodes.size() - 2)
+			{
+				float t = (seg_len > 0.0001f) ? ((distance_along_path - accum_dist) / seg_len) : 0.0f;
+				t = std::max(0.0f, std::min(1.0f, t));
+
+				const float ax = nodes[i]->getX(), ay = nodes[i]->getY(), az = nodes[i]->getZ();
+				const float bx = nodes[i + 1]->getX(), by = nodes[i + 1]->getY(), bz = nodes[i + 1]->getZ();
+
+				const float cx = ax + t * (bx - ax);
+				const float cy = ay + t * (by - ay);
+				const float cz = az + t * (bz - az);
+
+				float dx = bx - ax;
+				float dy = by - ay;
+				const float dxy = std::sqrt(dx * dx + dy * dy);
+
+				if (dxy > 0.0001f)
+				{
+					dx /= dxy;
+					dy /= dxy;
+
+					float bearing = std::atan2(dx, dy) * 180.0f / 3.14159265358979323846f;
+					if (bearing < 0.0f) bearing += 360.0f;
+					if (bearing >= 360.0f) bearing -= 360.0f;
+
+					const float nx = dy;
+					const float ny = -dx;
+
+					out_x = cx + nx * lateral_offset;
+					out_y = cy + ny * lateral_offset;
+					out_z = cz;
+					out_angle = bearing;
+				}
+				else
+				{
+					out_x = cx;
+					out_y = cy;
+					out_z = cz;
+					out_angle = 0.0f;
+				}
+				return true;
+			}
+			accum_dist += seg_len;
+		}
+
+		return true;
 	}
 };

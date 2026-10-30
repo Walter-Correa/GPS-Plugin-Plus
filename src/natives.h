@@ -114,6 +114,38 @@ namespace Natives
 	cell AMX_NATIVE_CALL ImportPathFromString(AMX* amx, cell* params);
 
 	cell AMX_NATIVE_CALL FindPathForVehicleCat(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL SetMapNodeDanger(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetMapNodeDanger(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL SetAreaDangerWeight(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL ResetDangerWeights(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL FindSafePath(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL FindEcoPath(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetPathElevationStats(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL RegisterTunnelArea(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL UnregisterTunnelArea(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL ClearCustomTunnelAreas(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL IsPointInTunnel(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL IsMapNodeUnderground(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetPathTunnelSegments(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL FindNearestPointByRoad(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL RegisterRoadRadar(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL UnregisterRoadRadar(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL ClearRoadRadars(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetNextPathRadar(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL GetPathOffsetPosition(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL IsMapNodeDeadEnd(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL FindEvasivePath(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL SetConnectionToll(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetConnectionToll(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL FindPathAvoidTolls(AMX* amx, cell* params);
 }
 
 extern AMX_NATIVE_INFO PluginNatives[];

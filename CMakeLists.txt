@@ -81,6 +81,8 @@ set(GPS_COMMON_SOURCES
   src/path.cpp
   src/pathfinder.cpp
   src/zones.cpp
+  src/tunnels.cpp
+  src/radars.cpp
   lib/sdk/amxplugin.cpp
   lib/sdk/amxplugin2.cpp
 )

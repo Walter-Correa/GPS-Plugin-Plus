@@ -24,6 +24,10 @@ public:
 	float getTrafficMultiplier() const;
 	void setTrafficMultiplier(float multiplier);
 
+	bool hasToll() const;
+	void setToll(bool has_toll, int cost = 0);
+	int getTollCost() const;
+
 	bool getLanePosition(int lane_index, float& out_x, float& out_y, float& out_z) const;
 
 private:
@@ -38,4 +42,6 @@ private:
 	bool one_way_;
 	bool blocked_;
 	float traffic_multiplier_;
+	bool has_toll_;
+	int toll_cost_;
 };

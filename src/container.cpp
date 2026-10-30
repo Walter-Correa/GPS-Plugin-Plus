@@ -269,6 +269,56 @@ namespace Container
 			delete node;
 			return true;
 		}
+
+		void SetDangerWeight(const int id, const float weight)
+		{
+			auto node = Find(id);
+			if (node != nullptr)
+			{
+				node->setDangerWeight(weight);
+			}
+		}
+
+		float GetDangerWeight(const int id)
+		{
+			auto node = Find(id);
+			if (node != nullptr)
+			{
+				return node->getDangerWeight();
+			}
+			return 0.0f;
+		}
+
+		void SetAreaDangerWeight(const float minx, const float miny, const float maxx, const float maxy, const float weight)
+		{
+			const float x1 = std::min(minx, maxx);
+			const float x2 = std::max(minx, maxx);
+			const float y1 = std::min(miny, maxy);
+			const float y2 = std::max(miny, maxy);
+
+			for (auto& pair : nodes)
+			{
+				auto node = pair.second;
+				if (node == nullptr) continue;
+				const float nx = node->getX();
+				const float ny = node->getY();
+				if (nx >= x1 && nx <= x2 && ny >= y1 && ny <= y2)
+				{
+					node->setDangerWeight(weight);
+				}
+			}
+		}
+
+		void ResetDangerWeights()
+		{
+			for (auto& pair : nodes)
+			{
+				if (pair.second != nullptr)
+				{
+					pair.second->setDangerWeight(0.0f);
+				}
+			}
+		}
 	}
 
 
@@ -486,6 +536,27 @@ namespace Container
 					pair.second->setTrafficMultiplier(1.0f);
 				}
 			}
+		}
+
+		void SetToll(const int id, const bool has_toll, const int cost)
+		{
+			auto conn = Find(id);
+			if (conn != nullptr)
+			{
+				conn->setToll(has_toll, cost);
+			}
+		}
+
+		bool GetToll(const int id, int& out_cost)
+		{
+			auto conn = Find(id);
+			if (conn != nullptr)
+			{
+				out_cost = conn->getTollCost();
+				return conn->hasToll();
+			}
+			out_cost = 0;
+			return false;
 		}
 	}
 

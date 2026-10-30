@@ -43,10 +43,14 @@ public:
 	bool isBlocked() const;
 	void setBlocked(bool blocked);
 
+	float getDangerWeight() const;
+	void setDangerWeight(float weight);
+
 private:
 	int id_;
 	bool is_set_for_deletion_;
 	bool blocked_;
+	float danger_weight_;
 
 	float x_;
 	float y_;

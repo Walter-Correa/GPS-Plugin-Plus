@@ -513,6 +513,187 @@ DemonstrateVehicleCategoryRouting(MapNode:startNode, MapNode:destNode)
 }
 
 // -----------------------------------------------------------------------------
+// Example 17: Safe-Route Anti-Crime Routing
+// -----------------------------------------------------------------------------
+DemonstrateSafeRoute(MapNode:startNode, MapNode:destNode)
+{
+    printf("\n--- [Demo 17: Safe-Route Anti-Crime Routing] ---");
+
+    // Mark an area as a high-crime red zone (e.g. gang territory)
+    SetAreaDangerWeight(1800.0, -1950.0, 2200.0, -1650.0, 3.5);
+
+    new Path:normalPath, Path:safePath;
+    FindPath(startNode, destNode, normalPath);
+    FindSafePath(startNode, destNode, safePath, 8.0); // 8.0 danger avoidance factor
+
+    new Float:normLen, Float:safeLen;
+    GetPathLength(normalPath, normLen);
+    GetPathLength(safePath, safeLen);
+
+    printf("Normal Route: %.1fm | Safe Route (detouring red zone): %.1fm",
+        normLen, safeLen);
+
+    ResetDangerWeights();
+    DestroyPath(normalPath);
+    DestroyPath(safePath);
+}
+
+// -----------------------------------------------------------------------------
+// Example 18: Eco-Routing & Elevation Climb Stats
+// -----------------------------------------------------------------------------
+DemonstrateEcoRouting(MapNode:startNode, MapNode:destNode)
+{
+    printf("\n--- [Demo 18: Eco-Routing & Elevation Climb Stats] ---");
+
+    new Path:ecoPath;
+    if (FindEcoPath(startNode, destNode, ecoPath, 0.10) == GPS_ERROR_NONE) // Max 10% incline preference
+    {
+        new Float:minZ, Float:maxZ, Float:totalClimb, Float:maxIncline;
+        GetPathElevationStats(ecoPath, minZ, maxZ, totalClimb, maxIncline);
+
+        printf("Eco Route: Min Z: %.1f | Max Z: %.1f | Total Climb: %.1fm | Max Incline: %.1f%%",
+            minZ, maxZ, totalClimb, maxIncline);
+
+        DestroyPath(ecoPath);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Example 19: Tunnel & Underground Detection
+// -----------------------------------------------------------------------------
+DemonstrateTunnels(MapNode:startNode, MapNode:destNode)
+{
+    printf("\n--- [Demo 19: Tunnel & Underground Detection] ---");
+
+    new Path:pathid;
+    if (FindPath(startNode, destNode, pathid) == GPS_ERROR_NONE)
+    {
+        new Float:entryDist, Float:exitDist;
+        if (GetPathTunnelSegments(pathid, entryDist, exitDist))
+        {
+            printf("Path crosses a tunnel! Entry at: %.1fm | Exit at: %.1fm", entryDist, exitDist);
+        }
+        else
+        {
+            printf("Path stays entirely above ground (no tunnels).");
+        }
+        DestroyPath(pathid);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Example 20: Nearest Facility by True Road Distance (Anti-Euclidean)
+// -----------------------------------------------------------------------------
+DemonstrateNearestServiceByRoad(Float:playerX, Float:playerY, Float:playerZ)
+{
+    printf("\n--- [Demo 20: Nearest Service by Real Road Network Distance] ---");
+
+    // 3 Hospitals: All Saints (LS), Jefferson (LS), Crippen Memorial (Montgomery)
+    new Float:hospitals[3][3] = {
+        { 1177.0, -1323.0, 14.0 },
+        { 2033.0, -1405.0, 17.2 },
+        { 1242.0, 327.0, 19.5 }
+    };
+
+    new nearestIdx, Float:roadDist, Path:navPath;
+    if (FindNearestPointByRoad(playerX, playerY, playerZ, hospitals, sizeof(hospitals), nearestIdx, roadDist, navPath) == GPS_ERROR_NONE)
+    {
+        printf("Closest Hospital by Asphalt: #%d at %.1f meters (Euclidean distance bypassed!)",
+            nearestIdx, roadDist);
+
+        if (IsValidPath(navPath))
+        {
+            DestroyPath(navPath);
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Example 21: Waze-Style Speed Radars on Path
+// -----------------------------------------------------------------------------
+DemonstrateSpeedRadars(MapNode:startNode, MapNode:destNode)
+{
+    printf("\n--- [Demo 21: Speed Radars & Early Road Hazards (Waze-style)] ---");
+
+    RegisterRoadRadar(1, 1500.0, -1700.0, 13.5, 80.0, 250.0);
+    RegisterRoadRadar(2, 800.0, -1800.0, 10.0, 60.0, 250.0);
+
+    new Path:pathid;
+    if (FindPath(startNode, destNode, pathid) == GPS_ERROR_NONE)
+    {
+        new radarId, Float:distToRadar, Float:radarLimit;
+        if (GetNextPathRadar(pathid, 50.0, radarId, distToRadar, radarLimit))
+        {
+            printf("Radar Alert: ID %d at %.1fm ahead! Speed Limit: %.0f km/h",
+                radarId, distToRadar, radarLimit);
+        }
+        DestroyPath(pathid);
+    }
+
+    ClearRoadRadars();
+}
+
+// -----------------------------------------------------------------------------
+// Example 22: Convoy and Escort Formation
+// -----------------------------------------------------------------------------
+DemonstrateConvoyOffsets(MapNode:startNode, MapNode:destNode)
+{
+    printf("\n--- [Demo 22: Convoy & Escort Formation Offsets] ---");
+
+    new Path:pathid;
+    if (FindPath(startNode, destNode, pathid) == GPS_ERROR_NONE)
+    {
+        new Float:leadDist = 120.0;
+        new Float:escortLeftX, Float:escortLeftY, Float:escortLeftZ, Float:angLeft;
+        new Float:escortRightX, Float:escortRightY, Float:escortRightZ, Float:angRight;
+
+        // Escort 1: 15m behind leader, 3m to the left
+        GetPathOffsetPosition(pathid, leadDist - 15.0, -3.0, escortLeftX, escortLeftY, escortLeftZ, angLeft);
+        // Escort 2: 15m behind leader, 3m to the right
+        GetPathOffsetPosition(pathid, leadDist - 15.0, 3.0, escortRightX, escortRightY, escortRightZ, angRight);
+
+        printf("Leader at %.0fm | Left Wing: (%.1f, %.1f) | Right Wing: (%.1f, %.1f)",
+            leadDist, escortLeftX, escortLeftY, escortRightX, escortRightY);
+
+        DestroyPath(pathid);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Example 23: Tactical Evasive Escape Routing
+// -----------------------------------------------------------------------------
+DemonstrateEvasiveEscape(MapNode:startNode, MapNode:destNode)
+{
+    printf("\n--- [Demo 23: Tactical Evasive Escape Routing (Anti-Dead-End)] ---");
+
+    new Path:evasivePath;
+    if (FindEvasivePath(startNode, destNode, evasivePath) == GPS_ERROR_NONE)
+    {
+        new Float:len;
+        GetPathLength(evasivePath, len);
+        printf("Evasive Pursuit Route calculated: %.1fm (Avoids highways and dead-ends, favors alleys)", len);
+        DestroyPath(evasivePath);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Example 24: Toll Road Restrictions
+// -----------------------------------------------------------------------------
+DemonstrateTollAvoidance(MapNode:startNode, MapNode:destNode)
+{
+    printf("\n--- [Demo 24: Toll Road & Bridge Restrictions] ---");
+
+    new Path:tollFreePath;
+    if (FindPathAvoidTolls(startNode, destNode, tollFreePath) == GPS_ERROR_NONE)
+    {
+        new Float:len;
+        GetPathLength(tollFreePath, len);
+        printf("Toll-Free Route: %.1fm", len);
+        DestroyPath(tollFreePath);
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Main Entry: Executes test suite
 // -----------------------------------------------------------------------------
 main()
@@ -542,6 +723,13 @@ main()
         DemonstrateZones(nodeA, nodeB);
         DemonstrateSerializationAndTTL(nodeA, nodeB);
         DemonstrateVehicleCategoryRouting(nodeA, nodeB);
+        DemonstrateSafeRoute(nodeA, nodeB);
+        DemonstrateEcoRouting(nodeA, nodeB);
+        DemonstrateTunnels(nodeA, nodeB);
+        DemonstrateSpeedRadars(nodeA, nodeB);
+        DemonstrateConvoyOffsets(nodeA, nodeB);
+        DemonstrateEvasiveEscape(nodeA, nodeB);
+        DemonstrateTollAvoidance(nodeA, nodeB);
     }
 
     new MapNode:nodeC, MapNode:nodeD;
@@ -555,6 +743,7 @@ main()
 
     DemonstrateRoadSnappingAndParking(lsDowntownX, lsDowntownY, lsDowntownZ);
     DemonstrateSafeRandomNode(1400.0, -1800.0, 1600.0, -1600.0);
+    DemonstrateNearestServiceByRoad(lsDowntownX, lsDowntownY, lsDowntownZ);
 
     print("\nDemonstration finished successfully!");
 }

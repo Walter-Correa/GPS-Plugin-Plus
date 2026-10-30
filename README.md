@@ -198,6 +198,10 @@ Add the include file at the top of your script:
 | `ROUTE_PREF_SHORTEST` | `0` | Shortest physical distance (in meters). |
 | `ROUTE_PREF_HIGHWAYS` | `1` | Prioritizes freeways and wide multi-lane boulevards over narrow streets. |
 | `ROUTE_PREF_AVOID_HIGHWAYS` | `2` | Avoids highways and expressways (useful for bicycles or pedestrian routes). |
+| `ROUTE_PREF_SAFEST` | `3` | Prioritizes safe neighborhoods and actively detours around configured danger areas. |
+| `ROUTE_PREF_ECO` | `4` | Minimizes steep vertical inclines and mountain ascents for fuel efficiency and heavy vehicles. |
+| `ROUTE_PREF_EVASIVE` | `5` | Tactical pursuit evasion: eliminates dead-ends, avoids highways, and favors alleys. |
+| `ROUTE_PREF_AVOID_TOLLS` | `6` | Avoids toll-paying bridges and highway checkpoints unless no alternative crossing exists. |
 
 #### `VehicleCategory`
 | Constant | Value | Description |
@@ -459,6 +463,94 @@ Returns the zone name where a specific map node is located.
 native GetPathZonesSummary(Path:pathid, zones[][], max_zones, &zones_count, max_zone_len = sizeof(zones[]));
 ```
 Extracts an ordered list of unique neighborhoods crossed along a path (e.g. "Ganton" $\to$ "Idlewood" $\to$ "Commerce").
+
+---
+
+#### Safe-Route & Anti-Crime Routing
+
+```pawn
+native SetMapNodeDanger(MapNode:nodeid, Float:danger_weight);
+native Float:GetMapNodeDanger(MapNode:nodeid);
+native SetAreaDangerWeight(Float:minx, Float:miny, Float:maxx, Float:maxy, Float:danger_weight);
+native ResetDangerWeights();
+native FindSafePath(MapNode:source, MapNode:target, &Path:pathid, Float:danger_penalty = 5.0, PathType:type = PATH_TYPE_VEHICLE, RoutePreference:pref = ROUTE_PREF_SHORTEST);
+```
+Assigns danger scores to specific nodes or rectangular world areas (e.g. gang turfs, crime hot-spots). `FindSafePath` automatically calculates the safest route, routing around danger zones unless detouring becomes disproportionately long.
+
+---
+
+#### Eco-Routing & Elevation Climb Analysis
+
+```pawn
+native FindEcoPath(MapNode:source, MapNode:target, &Path:pathid, Float:max_slope_gradient = 0.12, PathType:type = PATH_TYPE_VEHICLE);
+native GetPathElevationStats(Path:pathid, &Float:min_z, &Float:max_z, &Float:total_climb, &Float:max_incline_percent);
+```
+Finds the flattest available path by penalizing steep road climbs exceeding `max_slope_gradient`, ideal for heavy trucks, buses, or fuel-conservation routing. `GetPathElevationStats` retrieves the minimum and maximum altitude, total cumulative climb (meters), and maximum road grade percentage along the path.
+
+---
+
+#### Tunnel & Underground Detection
+
+```pawn
+native RegisterTunnelArea(Float:minx, Float:miny, Float:minz, Float:maxx, Float:maxy, Float:maxz, &tunnel_id);
+native bool:UnregisterTunnelArea(tunnel_id);
+native ClearCustomTunnelAreas();
+native bool:IsPointInTunnel(Float:x, Float:y, Float:z);
+native bool:IsMapNodeUnderground(MapNode:nodeid);
+native bool:GetPathTunnelSegments(Path:pathid, &Float:entry_distance, &Float:exit_distance);
+```
+Detects subterranean and covered roadway segments (Market subway, Verdant Bluffs tunnel, Easter Bay freeway underpass, LV airport tunnel, etc.) as well as custom registered tunnel zones. Perfect for simulating satellite signal loss, HUD GPS glitching, or underground radar blind-spots.
+
+---
+
+#### Nearest Service by Real Road Distance (Anti-Euclidean)
+
+```pawn
+native FindNearestPointByRoad(Float:from_x, Float:from_y, Float:from_z, const Float:points[][3], total_points, &nearest_index, &Float:road_distance, &Path:pathid = Path:0, PathType:type = PATH_TYPE_VEHICLE);
+```
+Takes an array of 3D destination coordinates (such as hospitals, gas stations, or mechanic shops) and evaluates actual asphalt drivable distance using single-source multi-target Dijkstra. Resolves the classic flaw of Euclidean straight-line distance picking locations separated by impassable rivers or mountains.
+
+---
+
+#### Speed Radars & Road Hazard Alerts (Waze-style)
+
+```pawn
+native RegisterRoadRadar(radarid, Float:x, Float:y, Float:z, Float:speed_limit_kmh, Float:alert_radius = 300.0);
+native bool:UnregisterRoadRadar(radarid);
+native ClearRoadRadars();
+native bool:GetNextPathRadar(Path:pathid, Float:current_dist, &radarid, &Float:dist_to_radar, &Float:radar_limit);
+```
+Registers fixed speed cameras, radar traps, or speed bumps along the road network. While traveling along an active path, queries the distance to the next upcoming radar and its enforced speed limit for dynamic HUD speedometer alerts.
+
+---
+
+#### Convoy & Escort Formations
+
+```pawn
+native GetPathOffsetPosition(Path:pathid, Float:distance_along_path, Float:lateral_offset, &Float:x, &Float:y, &Float:z, &Float:angle);
+```
+Given a path and a distance along the road, computes smooth perpendicular offsets (`lateral_offset > 0.0` right wing, `< 0.0` left wing) and facing angle along the road curve. Enables flawless formation driving for VIP motorcades, police escorts, and military convoys.
+
+---
+
+#### Tactical Pursuit Evasion (Anti-Dead-End)
+
+```pawn
+native bool:IsMapNodeDeadEnd(MapNode:nodeid);
+native FindEvasivePath(MapNode:source, MapNode:target, &Path:pathid, PathType:type = PATH_TYPE_VEHICLE);
+```
+Calculates tactical escape routes for fleeing suspects: mathematically guarantees avoidance of dead-end streets, avoids open highways where police interceptors dominate, and favors narrow alleys and high-turn complexity.
+
+---
+
+#### Toll Roads & Bridge Restrictions
+
+```pawn
+native SetConnectionToll(Connection:connectionid, bool:has_toll, toll_cost = 0);
+native bool:GetConnectionToll(Connection:connectionid, &toll_cost = 0);
+native FindPathAvoidTolls(MapNode:source, MapNode:target, &Path:pathid, PathType:type = PATH_TYPE_VEHICLE, RoutePreference:pref = ROUTE_PREF_SHORTEST);
+```
+Allows marking toll-paying bridges and checkpoints. When calculating routes with `FindPathAvoidTolls`, the algorithm avoids toll crossings while still guaranteeing connectivity if no free bridge exists.
 
 ---
 

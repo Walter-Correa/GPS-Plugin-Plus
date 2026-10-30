@@ -59,7 +59,11 @@ enum RoutePreference
 {
     ROUTE_PREF_SHORTEST             = 0,
     ROUTE_PREF_HIGHWAYS             = 1,
-    ROUTE_PREF_AVOID_HIGHWAYS       = 2
+    ROUTE_PREF_AVOID_HIGHWAYS       = 2,
+    ROUTE_PREF_SAFEST               = 3,
+    ROUTE_PREF_ECO                  = 4,
+    ROUTE_PREF_EVASIVE              = 5,
+    ROUTE_PREF_AVOID_TOLLS          = 6
 }
 
 enum VehicleCategory
@@ -167,6 +171,38 @@ native ExportPathToString(Path:pathid, buffer[], max_len = sizeof(buffer));
 native ImportPathFromString(const buffer[], &Path:pathid);
 
 native FindPathForVehicleCat(MapNode:source, MapNode:target, &Path:pathid, VehicleCategory:cat = VEHICLE_CAT_STANDARD, RoutePreference:pref = ROUTE_PREF_SHORTEST);
+
+native SetMapNodeDanger(MapNode:nodeid, Float:danger_weight);
+native Float:GetMapNodeDanger(MapNode:nodeid);
+native SetAreaDangerWeight(Float:minx, Float:miny, Float:maxx, Float:maxy, Float:danger_weight);
+native ResetDangerWeights();
+native FindSafePath(MapNode:source, MapNode:target, &Path:pathid, Float:danger_penalty = 5.0, PathType:type = PATH_TYPE_VEHICLE, RoutePreference:pref = ROUTE_PREF_SHORTEST);
+
+native FindEcoPath(MapNode:source, MapNode:target, &Path:pathid, Float:max_slope_gradient = 0.12, PathType:type = PATH_TYPE_VEHICLE);
+native GetPathElevationStats(Path:pathid, &Float:min_z, &Float:max_z, &Float:total_climb, &Float:max_incline_percent);
+
+native RegisterTunnelArea(Float:minx, Float:miny, Float:minz, Float:maxx, Float:maxy, Float:maxz, &tunnel_id);
+native bool:UnregisterTunnelArea(tunnel_id);
+native ClearCustomTunnelAreas();
+native bool:IsPointInTunnel(Float:x, Float:y, Float:z);
+native bool:IsMapNodeUnderground(MapNode:nodeid);
+native bool:GetPathTunnelSegments(Path:pathid, &Float:entry_distance, &Float:exit_distance);
+
+native FindNearestPointByRoad(Float:from_x, Float:from_y, Float:from_z, const Float:points[][3], total_points, &nearest_index, &Float:road_distance, &Path:pathid = Path:0, PathType:type = PATH_TYPE_VEHICLE);
+
+native RegisterRoadRadar(radarid, Float:x, Float:y, Float:z, Float:speed_limit_kmh, Float:alert_radius = 300.0);
+native bool:UnregisterRoadRadar(radarid);
+native ClearRoadRadars();
+native bool:GetNextPathRadar(Path:pathid, Float:current_dist, &radarid, &Float:dist_to_radar, &Float:radar_limit);
+
+native GetPathOffsetPosition(Path:pathid, Float:distance_along_path, Float:lateral_offset, &Float:x, &Float:y, &Float:z, &Float:angle);
+
+native bool:IsMapNodeDeadEnd(MapNode:nodeid);
+native FindEvasivePath(MapNode:source, MapNode:target, &Path:pathid, PathType:type = PATH_TYPE_VEHICLE);
+
+native SetConnectionToll(Connection:connectionid, bool:has_toll, toll_cost = 0);
+native bool:GetConnectionToll(Connection:connectionid, &toll_cost = 0);
+native FindPathAvoidTolls(MapNode:source, MapNode:target, &Path:pathid, PathType:type = PATH_TYPE_VEHICLE, RoutePreference:pref = ROUTE_PREF_SHORTEST);
 
 
 #if defined _PawnPlus_included

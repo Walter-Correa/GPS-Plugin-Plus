@@ -9,6 +9,7 @@ Node::Node(const int id, const float x, const float y, const float z, const Path
 	id_ = id;
 	is_set_for_deletion_ = false;
 	blocked_ = false;
+	danger_weight_ = 0.0f;
 
 	x_ = x;
 	y_ = y;
@@ -191,4 +192,16 @@ bool Node::isBlocked() const
 void Node::setBlocked(const bool blocked)
 {
 	blocked_ = blocked;
+}
+
+
+float Node::getDangerWeight() const
+{
+	return danger_weight_;
+}
+
+
+void Node::setDangerWeight(const float weight)
+{
+	danger_weight_ = (weight < 0.0f) ? 0.0f : weight;
 }

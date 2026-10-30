@@ -24,6 +24,11 @@ namespace Container
 		int GetHighestID(PathType type = static_cast<PathType>(-1));
 		void SetForDeletion(Node* node);
 		bool TryDelete(Node* node);
+
+		void SetDangerWeight(int id, float weight);
+		float GetDangerWeight(int id);
+		void SetAreaDangerWeight(float minx, float miny, float maxx, float maxy, float weight);
+		void ResetDangerWeights();
 	}
 
 	namespace Connections
@@ -39,6 +44,9 @@ namespace Container
 		float GetTrafficMultiplier(int id);
 		void SetAreaTrafficMultiplier(float minx, float miny, float maxx, float maxy, float multiplier);
 		void ResetTrafficMultipliers();
+
+		void SetToll(int id, bool has_toll, int cost);
+		bool GetToll(int id, int& out_cost);
 	}
 	
 	namespace Paths
