@@ -114,17 +114,10 @@ Copy the binary to the `plugins/` directory and update `server.cfg`:
 You can choose either the **native component** (recommended) or the **legacy plugin**:
 
 * **Option A: Native Component (Recommended)**
-  Copy the binary to the `components/` directory and update `config.json`:
-  ```json
-  {
-    "components": [
-      "GPS"
-    ]
-  }
-  ```
+  Simply copy the binary into your server's `components/` directory (`components/GPS.dll` on Windows or `components/GPS.so` on Linux). open.mp automatically discovers and loads all components located in this directory upon startup—no changes to `config.json` are needed!
 
 * **Option B: Legacy Plugin**
-  Copy the binary to the `plugins/` directory and update `config.json`:
+  Copy the binary to the `plugins/` directory and add it to `config.json`:
   ```json
   {
     "pawn": {
