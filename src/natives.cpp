@@ -965,7 +965,7 @@ namespace Natives
 
 		const auto type = static_cast<PathType>(params[3]);
 
-		if (params[0] >= (5 * 4) && params[4] >= 0 && params[4] <= ROUTE_PREF_AVOID_TOLLS)
+		if (params[0] >= (5 * 4) && params[4] >= 0 && params[4] <= ROUTE_PREF_PAVED_ONLY)
 		{
 			const auto pref = static_cast<RoutePreference>(params[4]);
 			return FindPathThreadedInternal(amx, params, type, pref, 6);
@@ -3203,6 +3203,280 @@ namespace Natives
 
 		return GPS_ERROR_NONE;
 	}
+
+
+	cell AMX_NATIVE_CALL GetPathRoundaboutInfo(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(5);
+		const auto path_id = static_cast<int>(params[1]);
+		const auto path = Container::Paths::Find(path_id);
+		if (path == nullptr) return GPS_ERROR_INVALID_PATH;
+
+		const int index = static_cast<int>(params[2]);
+		bool is_roundabout = false;
+		int exit_number = 0;
+		float radius = 0.0f;
+
+		if (!Pathfinder::GetPathRoundaboutInfo(path, index, is_roundabout, exit_number, radius))
+		{
+			return GPS_ERROR_INVALID_PATH;
+		}
+
+		cell* addr = nullptr;
+		amx_GetAddr(amx, params[3], &addr);
+		*addr = is_roundabout ? 1 : 0;
+
+		amx_GetAddr(amx, params[4], &addr);
+		*addr = exit_number;
+
+		amx_GetAddr(amx, params[5], &addr);
+		*addr = amx_ftoc(radius);
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL GetSmoothPathPoints(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(7);
+		const auto path_id = static_cast<int>(params[1]);
+		const auto path = Container::Paths::Find(path_id);
+		if (path == nullptr) return GPS_ERROR_INVALID_PATH;
+
+		const float spacing = amx_ctof(params[2]);
+		cell* out_x = nullptr;
+		amx_GetAddr(amx, params[3], &out_x);
+		cell* out_y = nullptr;
+		amx_GetAddr(amx, params[4], &out_y);
+		cell* out_z = nullptr;
+		amx_GetAddr(amx, params[5], &out_z);
+		const int max_points = static_cast<int>(params[6]);
+
+		if (out_x == nullptr || out_y == nullptr || out_z == nullptr || max_points <= 0)
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		std::vector<std::tuple<float, float, float>> pts;
+		if (!Pathfinder::GetSmoothPathPoints(path, spacing, pts, max_points))
+		{
+			return GPS_ERROR_INVALID_PATH;
+		}
+
+		const int written = std::min(static_cast<int>(pts.size()), max_points);
+		for (int i = 0; i < written; ++i)
+		{
+			out_x[i] = amx_ftoc(std::get<0>(pts[i]));
+			out_y[i] = amx_ftoc(std::get<1>(pts[i]));
+			out_z[i] = amx_ftoc(std::get<2>(pts[i]));
+		}
+
+		cell* total_addr = nullptr;
+		amx_GetAddr(amx, params[7], &total_addr);
+		*total_addr = written;
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL IsConnectionPaved(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(1);
+		const int id = static_cast<int>(params[1]);
+		return Container::Connections::IsPaved(id) ? 1 : 0;
+	}
+
+
+	cell AMX_NATIVE_CALL SetConnectionPaved(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(2);
+		const int id = static_cast<int>(params[1]);
+		const bool paved = params[2] != 0;
+		Container::Connections::SetPaved(id, paved);
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL FindPathPavedOnly(AMX* amx, cell* params)
+	{
+		if (params[0] < (3 * 4))
+		{
+			std::cout << __func__ << ": Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		const auto start_id = static_cast<int>(params[1]);
+		const auto start = Container::Nodes::Find(start_id);
+		if (start == nullptr) return GPS_ERROR_INVALID_NODE;
+
+		const auto target_id = static_cast<int>(params[2]);
+		const auto target = Container::Nodes::Find(target_id);
+		if (target == nullptr) return GPS_ERROR_INVALID_NODE;
+
+		auto type = PATH_TYPE_VEHICLE;
+		if (params[0] >= (4 * 4))
+		{
+			type = static_cast<PathType>(params[4]);
+		}
+
+		const auto result = Pathfinder::FindPathPavedOnly(start, target, type);
+		if (result == -1) return GPS_ERROR_INVALID_PATH;
+
+		cell* address = nullptr;
+		amx_GetAddr(amx, params[3], &address);
+		*address = result;
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL GetConnectionRoadClass(AMX* amx, cell* params)
+	{
+		if (params[0] < (1 * 4))
+		{
+			std::cout << __func__ << ": Expecting at least 1 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		const int id = static_cast<int>(params[1]);
+		RoadClass rc = Container::Connections::GetRoadClass(id);
+
+		if (params[0] >= (2 * 4))
+		{
+			float speed = Container::Connections::GetSpeedLimit(id);
+			cell* addr = nullptr;
+			amx_GetAddr(amx, params[2], &addr);
+			if (addr != nullptr)
+			{
+				*addr = amx_ftoc(speed);
+			}
+		}
+
+		return static_cast<cell>(rc);
+	}
+
+
+	cell AMX_NATIVE_CALL SetConnectionSpeedLimit(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(2);
+		const int id = static_cast<int>(params[1]);
+		const float speed = amx_ctof(params[2]);
+		Container::Connections::SetSpeedLimit(id, speed);
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL GetConnectionSpeedLimit(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(1);
+		const int id = static_cast<int>(params[1]);
+		float speed = Container::Connections::GetSpeedLimit(id);
+		return amx_ftoc(speed);
+	}
+
+
+	cell AMX_NATIVE_CALL GetPathRejoinPoint(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(5);
+		const auto old_id = static_cast<int>(params[1]);
+		const auto old_path = Container::Paths::Find(old_id);
+		if (old_path == nullptr) return GPS_ERROR_INVALID_PATH;
+
+		const auto new_id = static_cast<int>(params[2]);
+		const auto new_path = Container::Paths::Find(new_id);
+		if (new_path == nullptr) return GPS_ERROR_INVALID_PATH;
+
+		int diverge = -1, rejoin_old = -1, rejoin_new = -1;
+		if (!Pathfinder::GetPathRejoinPoint(old_path, new_path, diverge, rejoin_old, rejoin_new))
+		{
+			return GPS_ERROR_INVALID_PATH;
+		}
+
+		cell* addr = nullptr;
+		amx_GetAddr(amx, params[3], &addr);
+		*addr = diverge;
+
+		amx_GetAddr(amx, params[4], &addr);
+		*addr = rejoin_old;
+
+		amx_GetAddr(amx, params[5], &addr);
+		*addr = rejoin_new;
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL SetConnectionMaxHeight(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(2);
+		const int id = static_cast<int>(params[1]);
+		const float height = amx_ctof(params[2]);
+		Container::Connections::SetMaxHeight(id, height);
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL GetConnectionMaxHeight(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(1);
+		const int id = static_cast<int>(params[1]);
+		float height = Container::Connections::GetMaxHeight(id);
+		return amx_ftoc(height);
+	}
+
+
+	cell AMX_NATIVE_CALL SetAreaMaxHeight(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(5);
+		const float minx = amx_ctof(params[1]);
+		const float miny = amx_ctof(params[2]);
+		const float maxx = amx_ctof(params[3]);
+		const float maxy = amx_ctof(params[4]);
+		const float height = amx_ctof(params[5]);
+		Container::Connections::SetAreaMaxHeight(minx, miny, maxx, maxy, height);
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL FindPathWithHeightLimit(AMX* amx, cell* params)
+	{
+		if (params[0] < (4 * 4))
+		{
+			std::cout << __func__ << ": Expecting at least 4 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		const auto start_id = static_cast<int>(params[1]);
+		const auto start = Container::Nodes::Find(start_id);
+		if (start == nullptr) return GPS_ERROR_INVALID_NODE;
+
+		const auto target_id = static_cast<int>(params[2]);
+		const auto target = Container::Nodes::Find(target_id);
+		if (target == nullptr) return GPS_ERROR_INVALID_NODE;
+
+		const float vehicle_height = amx_ctof(params[3]);
+
+		auto type = PATH_TYPE_VEHICLE;
+		if (params[0] >= (5 * 4))
+		{
+			type = static_cast<PathType>(params[5]);
+		}
+
+		auto pref = ROUTE_PREF_SHORTEST;
+		if (params[0] >= (6 * 4))
+		{
+			pref = static_cast<RoutePreference>(params[6]);
+		}
+
+		const auto result = Pathfinder::FindPathWithHeightLimit(start, target, vehicle_height, type, pref);
+		if (result == -1) return GPS_ERROR_INVALID_PATH;
+
+		cell* address = nullptr;
+		amx_GetAddr(amx, params[4], &address);
+		*address = result;
+
+		return GPS_ERROR_NONE;
+	}
 }
 
 AMX_NATIVE_INFO PluginNatives[] =
@@ -3328,6 +3602,24 @@ AMX_NATIVE_INFO PluginNatives[] =
 	{"SetConnectionToll",				Natives::SetConnectionToll},
 	{"GetConnectionToll",				Natives::GetConnectionToll},
 	{"FindPathAvoidTolls",				Natives::FindPathAvoidTolls},
+
+	{"GetPathRoundaboutInfo",			Natives::GetPathRoundaboutInfo},
+	{"GetSmoothPathPoints",				Natives::GetSmoothPathPoints},
+
+	{"IsConnectionPaved",				Natives::IsConnectionPaved},
+	{"SetConnectionPaved",				Natives::SetConnectionPaved},
+	{"FindPathPavedOnly",				Natives::FindPathPavedOnly},
+
+	{"GetConnectionRoadClass",			Natives::GetConnectionRoadClass},
+	{"SetConnectionSpeedLimit",			Natives::SetConnectionSpeedLimit},
+	{"GetConnectionSpeedLimit",			Natives::GetConnectionSpeedLimit},
+
+	{"GetPathRejoinPoint",				Natives::GetPathRejoinPoint},
+
+	{"SetConnectionMaxHeight",			Natives::SetConnectionMaxHeight},
+	{"GetConnectionMaxHeight",			Natives::GetConnectionMaxHeight},
+	{"SetAreaMaxHeight",				Natives::SetAreaMaxHeight},
+	{"FindPathWithHeightLimit",			Natives::FindPathWithHeightLimit},
 
 	{0, 0}
 };

@@ -558,6 +558,96 @@ namespace Container
 			out_cost = 0;
 			return false;
 		}
+
+		void SetPaved(const int id, const bool paved)
+		{
+			auto conn = Find(id);
+			if (conn != nullptr)
+			{
+				conn->setPaved(paved);
+			}
+		}
+
+		bool IsPaved(const int id)
+		{
+			auto conn = Find(id);
+			if (conn != nullptr)
+			{
+				return conn->isPaved();
+			}
+			return true;
+		}
+
+		RoadClass GetRoadClass(const int id)
+		{
+			auto conn = Find(id);
+			if (conn != nullptr)
+			{
+				return conn->getRoadClass();
+			}
+			return ROAD_CLASS_RESIDENTIAL;
+		}
+
+		float GetSpeedLimit(const int id)
+		{
+			auto conn = Find(id);
+			if (conn != nullptr)
+			{
+				return conn->getSpeedLimit();
+			}
+			return 50.0f;
+		}
+
+		void SetSpeedLimit(const int id, const float speed)
+		{
+			auto conn = Find(id);
+			if (conn != nullptr)
+			{
+				conn->setSpeedLimit(speed);
+			}
+		}
+
+		float GetMaxHeight(const int id)
+		{
+			auto conn = Find(id);
+			if (conn != nullptr)
+			{
+				return conn->getMaxHeight();
+			}
+			return 0.0f;
+		}
+
+		void SetMaxHeight(const int id, const float height)
+		{
+			auto conn = Find(id);
+			if (conn != nullptr)
+			{
+				conn->setMaxHeight(height);
+			}
+		}
+
+		void SetAreaMaxHeight(const float minx, const float miny, const float maxx, const float maxy, const float height)
+		{
+			const float x1 = std::min(minx, maxx);
+			const float x2 = std::max(minx, maxx);
+			const float y1 = std::min(miny, maxy);
+			const float y2 = std::max(miny, maxy);
+
+			for (auto& pair : connections)
+			{
+				auto conn = pair.second;
+				if (conn == nullptr) continue;
+				auto src = conn->getSource();
+				auto tgt = conn->getTarget();
+				if (src == nullptr || tgt == nullptr) continue;
+				const float mx = (src->getX() + tgt->getX()) * 0.5f;
+				const float my = (src->getY() + tgt->getY()) * 0.5f;
+				if (mx >= x1 && mx <= x2 && my >= y1 && my <= y2)
+				{
+					conn->setMaxHeight(height);
+				}
+			}
+		}
 	}
 
 

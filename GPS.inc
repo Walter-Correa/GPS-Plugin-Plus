@@ -63,7 +63,16 @@ enum RoutePreference
     ROUTE_PREF_SAFEST               = 3,
     ROUTE_PREF_ECO                  = 4,
     ROUTE_PREF_EVASIVE              = 5,
-    ROUTE_PREF_AVOID_TOLLS          = 6
+    ROUTE_PREF_AVOID_TOLLS          = 6,
+    ROUTE_PREF_PAVED_ONLY           = 7
+}
+
+enum RoadClass
+{
+    ROAD_CLASS_ALLEY                = 0,
+    ROAD_CLASS_RESIDENTIAL          = 1,
+    ROAD_CLASS_AVENUE               = 2,
+    ROAD_CLASS_HIGHWAY              = 3
 }
 
 enum VehicleCategory
@@ -203,6 +212,24 @@ native FindEvasivePath(MapNode:source, MapNode:target, &Path:pathid, PathType:ty
 native SetConnectionToll(Connection:connectionid, bool:has_toll, toll_cost = 0);
 native bool:GetConnectionToll(Connection:connectionid, &toll_cost = 0);
 native FindPathAvoidTolls(MapNode:source, MapNode:target, &Path:pathid, PathType:type = PATH_TYPE_VEHICLE, RoutePreference:pref = ROUTE_PREF_SHORTEST);
+
+native GetPathRoundaboutInfo(Path:pathid, index, &bool:is_roundabout, &exit_number, &Float:roundabout_radius);
+native GetSmoothPathPoints(Path:pathid, Float:spacing_meters, Float:out_x[], Float:out_y[], Float:out_z[], max_points = sizeof(out_x), &total_points = 0);
+
+native bool:IsConnectionPaved(Connection:connectionid);
+native SetConnectionPaved(Connection:connectionid, bool:paved);
+native FindPathPavedOnly(MapNode:source, MapNode:target, &Path:pathid, PathType:type = PATH_TYPE_VEHICLE);
+
+native RoadClass:GetConnectionRoadClass(Connection:connectionid, &Float:recommended_speed_kmh = 0.0);
+native SetConnectionSpeedLimit(Connection:connectionid, Float:speed_kmh);
+native Float:GetConnectionSpeedLimit(Connection:connectionid);
+
+native GetPathRejoinPoint(Path:old_path, Path:new_path, &diverge_step, &rejoin_old_step, &rejoin_new_step);
+
+native SetConnectionMaxHeight(Connection:connectionid, Float:max_height_meters);
+native Float:GetConnectionMaxHeight(Connection:connectionid);
+native SetAreaMaxHeight(Float:minx, Float:miny, Float:maxx, Float:maxy, Float:max_height_meters);
+native FindPathWithHeightLimit(MapNode:source, MapNode:target, Float:vehicle_height, &Path:pathid, PathType:type = PATH_TYPE_VEHICLE, RoutePreference:pref = ROUTE_PREF_SHORTEST);
 
 
 #if defined _PawnPlus_included

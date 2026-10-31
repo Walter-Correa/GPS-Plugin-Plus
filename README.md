@@ -88,6 +88,24 @@
   * Full pathfinding support for **Vehicles** (`PATH_TYPE_VEHICLE`), **Pedestrians** (`PATH_TYPE_PEDESTRIAN`), and **Boats** (`PATH_TYPE_BOAT`).
   * Supports synchronous, threaded callback-based, and asynchronous ([PawnPlus](https://github.com/IllidanS4/PawnPlus) task) path queries.
 
+* **Roundabout & Exit Detection:**
+  * Detects rotary traffic circles (`GetPathRoundaboutInfo`), determines estimated roundabout radius, and provides the exact exit ordinal number (1st, 2nd, 3rd exit) for voice navigation and HUD alerts.
+
+* **Catmull-Rom Spline Densification:**
+  * Densifies coarse waypoint paths with cubic Catmull-Rom interpolation (`GetSmoothPathPoints`) at customizable metric intervals, producing buttery-smooth curves for autonomous NPC driving or cinematic camera tracks.
+
+* **Pavement Classification (Paved vs. Offroad):**
+  * Classifies connections into paved asphalt or dirt/off-road tracks (`IsConnectionPaved`, `SetConnectionPaved`, `FindPathPavedOnly`, `ROUTE_PREF_PAVED_ONLY`), keeping low-slung sports cars and luxury sedans off mountain trails.
+
+* **Road Classification & Legal Speed Limits:**
+  * Automatically categorizes roads (`ROAD_CLASS_ALLEY`, `ROAD_CLASS_RESIDENTIAL`, `ROAD_CLASS_AVENUE`, `ROAD_CLASS_HIGHWAY`) and recommended speeds (`GetConnectionRoadClass`), or set enforceable custom speed limits (`SetConnectionSpeedLimit`, `GetConnectionSpeedLimit`).
+
+* **Delta Re-routing & Path Rejoin Point:**
+  * Computes where a detour or recalculated route diverges from and rejoins an original route (`GetPathRejoinPoint`), preserving active navigation state and avoiding redundant full recalculations.
+
+* **Vehicle Clearance & Low Bridges:**
+  * Enforces maximum vehicle height constraints per connection or area (`SetConnectionMaxHeight`, `GetConnectionMaxHeight`, `SetAreaMaxHeight`). Tall trucks and double-deckers automatically detour around low bridges and underpasses (`FindPathWithHeightLimit`).
+
 ---
 
 ## Installation
@@ -195,6 +213,15 @@ Add the include file at the top of your script:
 | `ROUTE_PREF_ECO` | `4` | Minimizes steep vertical inclines and mountain ascents for fuel efficiency and heavy vehicles. |
 | `ROUTE_PREF_EVASIVE` | `5` | Tactical pursuit evasion: eliminates dead-ends, avoids highways, and favors alleys. |
 | `ROUTE_PREF_AVOID_TOLLS` | `6` | Avoids toll-paying bridges and highway checkpoints unless no alternative crossing exists. |
+| `ROUTE_PREF_PAVED_ONLY` | `7` | Strict asphalt-only routing; entirely avoids dirt, sand, and unpaved roads. |
+
+#### `RoadClass`
+| Constant | Value | Description | Default Recommended Speed |
+| :--- | :---: | :--- | :---: |
+| `ROAD_CLASS_ALLEY` | `0` | Narrow alleyways and backstreets (< 6.0m). | 30.0 km/h |
+| `ROAD_CLASS_RESIDENTIAL` | `1` | Standard residential and urban 1-2 lane streets. | 50.0 km/h |
+| `ROAD_CLASS_AVENUE` | `2` | Multi-lane urban avenues and arterial roads. | 80.0 km/h |
+| `ROAD_CLASS_HIGHWAY` | `3` | Grade-separated freeways and expressways. | 120.0 km/h |
 
 #### `VehicleCategory`
 | Constant | Value | Description |
@@ -619,6 +646,67 @@ Directly queries the target node ID of a given connection index, simplifying ran
 native SaveMapNodesToFile(const filename[]);
 ```
 Serializes the current node and connection graph to disk.
+
+---
+
+#### Roundabout & Exit Detection
+
+```pawn
+native GetPathRoundaboutInfo(Path:pathid, index, &bool:is_roundabout, &exit_number, &Float:roundabout_radius);
+```
+Analyzes whether waypoint `index` on the path forms part of a circular rotary roundabout. Outputs `is_roundabout` (`true`/`false`), the 1-based `exit_number` taken from entry to departure (e.g., 1 for 1st exit, 2 for 2nd exit), and the estimated `roundabout_radius` in meters.
+
+---
+
+#### Catmull-Rom Spline Densification
+
+```pawn
+native GetSmoothPathPoints(Path:pathid, Float:spacing_meters, Float:out_x[], Float:out_y[], Float:out_z[], max_points = sizeof(out_x), &total_points = 0);
+```
+Applies cubic Catmull-Rom spline interpolation along the path nodes, generating equidistant dense 3D points spaced by `spacing_meters` (e.g. 2.0m to 5.0m). Produces ultra-smooth trajectories ideal for autonomous NPC steering algorithms and cinematic camera rails.
+
+---
+
+#### Pavement Classification (Paved vs. Offroad)
+
+```pawn
+native bool:IsConnectionPaved(Connection:connectionid);
+native SetConnectionPaved(Connection:connectionid, bool:paved);
+native FindPathPavedOnly(MapNode:source, MapNode:target, &Path:pathid, PathType:type = PATH_TYPE_VEHICLE);
+```
+Determines or overrides whether a road connection is paved asphalt (`true`) or unpaved dirt/gravel (`false`). `FindPathPavedOnly` calculates routes restricted strictly to paved roads, preventing sports and luxury cars from traversing rugged mountain trails.
+
+---
+
+#### Road Classification & Legal Speed Limits
+
+```pawn
+native RoadClass:GetConnectionRoadClass(Connection:connectionid, &Float:recommended_speed_kmh = 0.0);
+native SetConnectionSpeedLimit(Connection:connectionid, Float:speed_kmh);
+native Float:GetConnectionSpeedLimit(Connection:connectionid);
+```
+Categorizes a road connection into `ROAD_CLASS_ALLEY`, `ROAD_CLASS_RESIDENTIAL`, `ROAD_CLASS_AVENUE`, or `ROAD_CLASS_HIGHWAY` with its default advisory speed. Scripters can also enforce custom legal speed limits per connection (`SetConnectionSpeedLimit`, `GetConnectionSpeedLimit`) for radar traps and traffic enforcement.
+
+---
+
+#### Delta Re-routing & Path Rejoin Point
+
+```pawn
+native GetPathRejoinPoint(Path:old_path, Path:new_path, &diverge_step, &rejoin_old_step, &rejoin_new_step);
+```
+Compares an existing path with a newly recalculated detour path. Returns the waypoint index where the new route diverges (`diverge_step`) and the earliest common waypoint where the detour rejoins the original route (`rejoin_old_step` in `old_path`, `rejoin_new_step` in `new_path`). Allows partial route updates without wiping client navigation checkpoints.
+
+---
+
+#### Vehicle Height Clearance & Low Bridges
+
+```pawn
+native SetConnectionMaxHeight(Connection:connectionid, Float:max_height_meters);
+native Float:GetConnectionMaxHeight(Connection:connectionid);
+native SetAreaMaxHeight(Float:minx, Float:miny, Float:maxx, Float:maxy, Float:max_height_meters);
+native FindPathWithHeightLimit(MapNode:source, MapNode:target, Float:vehicle_height, &Path:pathid, PathType:type = PATH_TYPE_VEHICLE, RoutePreference:pref = ROUTE_PREF_SHORTEST);
+```
+Configures maximum vehicle clearance heights (in meters) for specific road connections or geographic bounding boxes (e.g., under low railway bridges or tunnel entrances). `FindPathWithHeightLimit` guarantees that tall vehicles (such as double-decker buses, car haulers, and semi-trucks) circumvent low-clearance obstacles.
 
 ---
 

@@ -19,6 +19,9 @@ Connection::Connection(const int id, Node* source, Node* target, const float dis
 	traffic_multiplier_ = 1.0f;
 	has_toll_ = false;
 	toll_cost_ = 0;
+	is_paved_ = (road_width_ >= 5.5f);
+	speed_limit_ = 0.0f;
+	max_height_ = 0.0f;
 }
 
 
@@ -110,6 +113,72 @@ void Connection::setToll(const bool has_toll, const int cost)
 int Connection::getTollCost() const
 {
 	return toll_cost_;
+}
+
+
+bool Connection::isPaved() const
+{
+	return is_paved_;
+}
+
+
+void Connection::setPaved(const bool paved)
+{
+	is_paved_ = paved;
+}
+
+
+RoadClass Connection::getRoadClass() const
+{
+	if ((target_ != nullptr && (target_->getFlags() & NODE_FLAG_HIGHWAY) != 0) || (road_width_ >= 14.0f && right_lanes_ >= 2))
+	{
+		return ROAD_CLASS_HIGHWAY;
+	}
+	if (right_lanes_ >= 2 || road_width_ >= 10.0f)
+	{
+		return ROAD_CLASS_AVENUE;
+	}
+	if (road_width_ < 5.5f)
+	{
+		return ROAD_CLASS_ALLEY;
+	}
+	return ROAD_CLASS_RESIDENTIAL;
+}
+
+
+float Connection::getSpeedLimit() const
+{
+	if (speed_limit_ > 0.0f)
+	{
+		return speed_limit_;
+	}
+
+	switch (getRoadClass())
+	{
+	case ROAD_CLASS_ALLEY: return 30.0f;
+	case ROAD_CLASS_RESIDENTIAL: return 50.0f;
+	case ROAD_CLASS_AVENUE: return 80.0f;
+	case ROAD_CLASS_HIGHWAY: return 120.0f;
+	default: return 50.0f;
+	}
+}
+
+
+void Connection::setSpeedLimit(const float speed)
+{
+	speed_limit_ = (speed < 0.0f) ? 0.0f : speed;
+}
+
+
+float Connection::getMaxHeight() const
+{
+	return max_height_;
+}
+
+
+void Connection::setMaxHeight(const float height)
+{
+	max_height_ = (height < 0.0f) ? 0.0f : height;
 }
 
 

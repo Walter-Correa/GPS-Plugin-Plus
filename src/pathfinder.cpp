@@ -39,7 +39,7 @@ namespace Pathfinder
 	};
 
 
-	Path* FindPathInternal(Node* start, Node* target, const PathType type, const RoutePreference pref, const VehicleCategory cat, const float danger_penalty, const float max_slope_gradient, const bool avoid_tolls, const bool evasive)
+	Path* FindPathInternal(Node* start, Node* target, const PathType type, const RoutePreference pref, const VehicleCategory cat, const float danger_penalty, const float max_slope_gradient, const bool avoid_tolls, const bool evasive, const float vehicle_height)
 	{
 		if (start == nullptr || target == nullptr || start->isBlocked() || target->isBlocked())
 		{
@@ -85,6 +85,15 @@ namespace Pathfinder
 					continue;
 				}
 
+				// Height clearance / low bridge restriction
+				if (vehicle_height > 0.0f && connection->getMaxHeight() > 0.0f)
+				{
+					if (vehicle_height > connection->getMaxHeight())
+					{
+						continue;
+					}
+				}
+
 				const auto connection_target = connection->getTarget();
 
 				if (connection_target == current_node->node || connection_target->isSetForDeletion() || connection_target->isBlocked())
@@ -122,6 +131,13 @@ namespace Pathfinder
 					if ((connection_target->getFlags() & NODE_FLAG_HIGHWAY) != 0)
 					{
 						weight_factor = 3.5f;
+					}
+				}
+				else if (pref == ROUTE_PREF_PAVED_ONLY)
+				{
+					if (!connection->isPaved())
+					{
+						weight_factor = 25.0f;
 					}
 				}
 
@@ -908,6 +924,238 @@ namespace Pathfinder
 			accum_dist += seg_len;
 		}
 
+		return true;
+	}
+
+
+	int FindPathPavedOnly(Node* start, Node* target, const PathType type)
+	{
+		try
+		{
+			Container::LockShared();
+			const auto path = FindPathInternal(start, target, type, ROUTE_PREF_PAVED_ONLY, VEHICLE_CAT_STANDARD, 0.0f, 0.0f, false, false, 0.0f);
+			Container::UnlockShared();
+
+			Container::LockExclusive();
+			const auto result = Container::Paths::Add(path);
+			Container::UnlockExclusive();
+
+			return result;
+		}
+		catch (const PathNotFoundException &e)
+		{
+			Container::UnlockShared();
+			return INVALID_PATH_ID;
+		}
+	}
+
+
+	int FindPathWithHeightLimit(Node* start, Node* target, float vehicle_height, const PathType type, const RoutePreference pref)
+	{
+		try
+		{
+			Container::LockShared();
+			const auto path = FindPathInternal(start, target, type, pref, VEHICLE_CAT_STANDARD, 0.0f, 0.0f, false, false, vehicle_height);
+			Container::UnlockShared();
+
+			Container::LockExclusive();
+			const auto result = Container::Paths::Add(path);
+			Container::UnlockExclusive();
+
+			return result;
+		}
+		catch (const PathNotFoundException &e)
+		{
+			Container::UnlockShared();
+			return INVALID_PATH_ID;
+		}
+	}
+
+
+	bool GetSmoothPathPoints(Path* path, float spacing_meters, std::vector<std::tuple<float, float, float>>& out_points, int max_points)
+	{
+		out_points.clear();
+		if (path == nullptr || spacing_meters <= 0.0f || max_points <= 0) return false;
+
+		const auto& nodes = path->getNodes();
+		if (nodes.empty()) return false;
+
+		if (nodes.size() == 1)
+		{
+			out_points.push_back({ nodes[0]->getX(), nodes[0]->getY(), nodes[0]->getZ() });
+			return true;
+		}
+
+		const float total_len = path->getLength();
+		if (total_len <= 0.001f)
+		{
+			out_points.push_back({ nodes[0]->getX(), nodes[0]->getY(), nodes[0]->getZ() });
+			return true;
+		}
+
+		std::vector<float> dists;
+		dists.reserve(nodes.size());
+		float acc = 0.0f;
+		dists.push_back(0.0f);
+		for (size_t i = 1; i < nodes.size(); ++i)
+		{
+			acc += nodes[i - 1]->getDistanceFromNode(nodes[i]);
+			dists.push_back(acc);
+		}
+
+		float d = 0.0f;
+		size_t cur_seg = 0;
+
+		while (d <= total_len + 0.01f && static_cast<int>(out_points.size()) < max_points)
+		{
+			while (cur_seg < dists.size() - 2 && dists[cur_seg + 1] < d)
+			{
+				cur_seg++;
+			}
+
+			size_t i0 = (cur_seg > 0) ? cur_seg - 1 : cur_seg;
+			size_t i1 = cur_seg;
+			size_t i2 = cur_seg + 1;
+			size_t i3 = (cur_seg + 2 < nodes.size()) ? cur_seg + 2 : cur_seg + 1;
+
+			float seg_start = dists[i1];
+			float seg_end = dists[i2];
+			float seg_len = seg_end - seg_start;
+			float t = (seg_len > 0.0001f) ? ((d - seg_start) / seg_len) : 0.0f;
+			t = std::max(0.0f, std::min(1.0f, t));
+
+			float t2 = t * t;
+			float t3 = t2 * t;
+
+			auto interp = [t, t2, t3](float p0, float p1, float p2, float p3) {
+				return 0.5f * ((2.0f * p1) +
+					(-p0 + p2) * t +
+					(2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 +
+					(-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
+			};
+
+			float x = interp(nodes[i0]->getX(), nodes[i1]->getX(), nodes[i2]->getX(), nodes[i3]->getX());
+			float y = interp(nodes[i0]->getY(), nodes[i1]->getY(), nodes[i2]->getY(), nodes[i3]->getY());
+			float z = interp(nodes[i0]->getZ(), nodes[i1]->getZ(), nodes[i2]->getZ(), nodes[i3]->getZ());
+
+			out_points.push_back({ x, y, z });
+
+			d += spacing_meters;
+		}
+
+		return !out_points.empty();
+	}
+
+
+	bool GetPathRoundaboutInfo(Path* path, int index, bool& is_roundabout, int& exit_number, float& roundabout_radius)
+	{
+		is_roundabout = false;
+		exit_number = 0;
+		roundabout_radius = 0.0f;
+
+		if (path == nullptr) return false;
+		const auto& nodes = path->getNodes();
+		const int count = static_cast<int>(nodes.size());
+		if (index < 0 || index >= count) return false;
+
+		int start_idx = std::max(0, index - 2);
+		int end_idx = std::min(count - 1, index + 4);
+		if (end_idx - start_idx < 3) return true;
+
+		float sum_x = 0.0f, sum_y = 0.0f;
+		int pts = 0;
+		for (int i = start_idx; i <= end_idx; ++i)
+		{
+			sum_x += nodes[i]->getX();
+			sum_y += nodes[i]->getY();
+			pts++;
+		}
+		float cx = sum_x / pts;
+		float cy = sum_y / pts;
+
+		float avg_r = 0.0f;
+		for (int i = start_idx; i <= end_idx; ++i)
+		{
+			float dx = nodes[i]->getX() - cx;
+			float dy = nodes[i]->getY() - cy;
+			avg_r += std::sqrt(dx * dx + dy * dy);
+		}
+		avg_r /= pts;
+
+		if (avg_r >= 8.0f && avg_r <= 55.0f)
+		{
+			int exits = 1;
+			for (int i = start_idx; i < index && i < count - 1; ++i)
+			{
+				for (auto conn : nodes[i]->getConnections())
+				{
+					auto tgt = conn->getTarget();
+					if (tgt != nullptr && tgt != nodes[i + 1])
+					{
+						float dx = tgt->getX() - cx;
+						float dy = tgt->getY() - cy;
+						float dist_to_c = std::sqrt(dx * dx + dy * dy);
+						if (dist_to_c > avg_r * 1.3f)
+						{
+							exits++;
+							break;
+						}
+					}
+				}
+			}
+
+			is_roundabout = true;
+			exit_number = exits;
+			roundabout_radius = avg_r;
+		}
+
+		return true;
+	}
+
+
+	bool GetPathRejoinPoint(Path* old_path, Path* new_path, int& diverge_step, int& rejoin_old_step, int& rejoin_new_step)
+	{
+		diverge_step = -1;
+		rejoin_old_step = -1;
+		rejoin_new_step = -1;
+
+		if (old_path == nullptr || new_path == nullptr) return false;
+
+		const auto& old_nodes = old_path->getNodes();
+		const auto& new_nodes = new_path->getNodes();
+
+		if (old_nodes.empty() || new_nodes.empty()) return false;
+
+		const int old_size = static_cast<int>(old_nodes.size());
+		const int new_size = static_cast<int>(new_nodes.size());
+
+		int min_len = std::min(old_size, new_size);
+		int div = 0;
+		while (div < min_len && old_nodes[div]->getID() == new_nodes[div]->getID())
+		{
+			div++;
+		}
+		diverge_step = div;
+
+		std::unordered_map<int, int> old_node_indices;
+		for (int i = diverge_step; i < old_size; ++i)
+		{
+			old_node_indices[old_nodes[i]->getID()] = i;
+		}
+
+		for (int j = diverge_step; j < new_size; ++j)
+		{
+			auto it = old_node_indices.find(new_nodes[j]->getID());
+			if (it != old_node_indices.end())
+			{
+				rejoin_new_step = j;
+				rejoin_old_step = it->second;
+				return true;
+			}
+		}
+
+		rejoin_old_step = old_size - 1;
+		rejoin_new_step = new_size - 1;
 		return true;
 	}
 };

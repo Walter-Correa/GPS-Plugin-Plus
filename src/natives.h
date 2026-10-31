@@ -146,6 +146,24 @@ namespace Natives
 	cell AMX_NATIVE_CALL SetConnectionToll(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL GetConnectionToll(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL FindPathAvoidTolls(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL GetPathRoundaboutInfo(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetSmoothPathPoints(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL IsConnectionPaved(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL SetConnectionPaved(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL FindPathPavedOnly(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL GetConnectionRoadClass(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL SetConnectionSpeedLimit(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetConnectionSpeedLimit(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL GetPathRejoinPoint(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL SetConnectionMaxHeight(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetConnectionMaxHeight(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL SetAreaMaxHeight(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL FindPathWithHeightLimit(AMX* amx, cell* params);
 }
 
 extern AMX_NATIVE_INFO PluginNatives[];

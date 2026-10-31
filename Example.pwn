@@ -11,6 +11,29 @@
     - Wrong-Way Traffic Monitoring (IsPlayerDrivingAgainstTraffic, IsPointAgainstTraffic)
     - Turn-by-Turn Navigation & ETA (GetPathTurnDirection, GetPathEstimatedTravelTime)
     - Smart Height/Layer Bounding (GetRandomMapNodeFromArea with minz, maxz)
+    - Multi-stop / TSP Delivery Order (FindMultiStopPath)
+    - Real-Time Path Progress & Off-Route Detours (GetPathProgress, GetSimplifiedPathNodes)
+    - Dynamic Traffic Congestion Multipliers (SetConnectionTrafficMultiplier)
+    - Dynamic Intercept Calculation for Police (FindInterceptPath)
+    - Pure Pursuit Steering for Autonomous Driving (GetPurePursuitSteering)
+    - Reachability / Isochrone Analysis (GetReachableMapNodes)
+    - In-Memory Zone Recognition (GetPointZoneName, GetPathZonesSummary)
+    - Path Binary Serialization & Auto-TTL (SavePathToFile, SetPathAutoDestroy)
+    - Heavy Truck & Motorcycle Profiles (FindPathForVehicleCat)
+    - Safety & Crime Avoidance Routing (FindSafePath)
+    - Eco Fuel-Saving & Elevation Profiles (FindEcoPath, GetPathElevationStats)
+    - Tunnel & Underpass Management (RegisterTunnelArea, IsPointInTunnel)
+    - Multi-Destination Road Query (FindNearestPointByRoad)
+    - Speed Camera / Radar Warnings (RegisterRoadRadar, GetNextPathRadar)
+    - Convoy & Escort Formation Offsets (GetPathOffsetPosition)
+    - Tactical Evasive Routing (FindEvasivePath)
+    - Toll Road Restrictions (FindPathAvoidTolls)
+    - Roundabout & Exit Detection (GetPathRoundaboutInfo)
+    - Catmull-Rom Spline Densification (GetSmoothPathPoints)
+    - Pavement Classification (FindPathPavedOnly)
+    - Road Classification & Speed Limits (GetConnectionRoadClass)
+    - Delta Re-routing & Path Rejoin (GetPathRejoinPoint)
+    - Height Clearance & Low Bridges (FindPathWithHeightLimit)
 ================================================================================
 */
 
@@ -694,6 +717,154 @@ DemonstrateTollAvoidance(MapNode:startNode, MapNode:destNode)
 }
 
 // -----------------------------------------------------------------------------
+// Example 25: Roundabout & Exit Detection
+// -----------------------------------------------------------------------------
+DemonstrateRoundaboutDetection(MapNode:startNode, MapNode:destNode)
+{
+    printf("\n--- [Demo 25: Roundabout & Exit Detection] ---");
+
+    new Path:pathid;
+    if (FindPath(startNode, destNode, pathid) == GPS_ERROR_NONE)
+    {
+        new size;
+        GetPathSize(pathid, size);
+        for (new i = 0; i < size; ++i)
+        {
+            new bool:isRoundabout, exitNum, Float:radius;
+            GetPathRoundaboutInfo(pathid, i, isRoundabout, exitNum, radius);
+            if (isRoundabout)
+            {
+                printf("Step %d is in a roundabout! Radius: %.1fm | Exit Number: %d", i, radius, exitNum);
+                break;
+            }
+        }
+        DestroyPath(pathid);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Example 26: Catmull-Rom Spline Densification for Ultra-Smooth Driving
+// -----------------------------------------------------------------------------
+DemonstrateSplineDensification(MapNode:startNode, MapNode:destNode)
+{
+    printf("\n--- [Demo 26: Catmull-Rom Spline Densification] ---");
+
+    new Path:pathid;
+    if (FindPath(startNode, destNode, pathid) == GPS_ERROR_NONE)
+    {
+        new Float:smoothX[64], Float:smoothY[64], Float:smoothZ[64];
+        new totalPts = 0;
+        // Sample interpolated points every 5.0 meters along the route
+        GetSmoothPathPoints(pathid, 5.0, smoothX, smoothY, smoothZ, sizeof(smoothX), totalPts);
+
+        printf("Original path densified to %d high-resolution spline points (5.0m step).", totalPts);
+        if (totalPts > 0)
+        {
+            printf("First smooth point: (%.1f, %.1f, %.1f)", smoothX[0], smoothY[0], smoothZ[0]);
+        }
+        DestroyPath(pathid);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Example 27: Pavement Classification (Asphalt vs. Dirt/Offroad)
+// -----------------------------------------------------------------------------
+DemonstratePavementRouting(MapNode:startNode, MapNode:destNode)
+{
+    printf("\n--- [Demo 27: Pavement Classification & Asphalt-Only Routing] ---");
+
+    new Path:pavedPath;
+    if (FindPathPavedOnly(startNode, destNode, pavedPath) == GPS_ERROR_NONE)
+    {
+        new Float:len;
+        GetPathLength(pavedPath, len);
+        printf("Paved-only route calculated successfully: %.1fm (100%% asphalt/paved)", len);
+        DestroyPath(pavedPath);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Example 28: Road Classification & Legal Speed Limits
+// -----------------------------------------------------------------------------
+DemonstrateRoadClassAndSpeedLimits(MapNode:nodeA)
+{
+    printf("\n--- [Demo 28: Road Classification & Legal Speed Limits] ---");
+
+    new count;
+    GetMapNodeConnectionCount(nodeA, count);
+    if (count > 0)
+    {
+        new Connection:conn;
+        GetMapNodeConnection(nodeA, 0, conn);
+        if (conn != INVALID_CONNECTION_ID)
+        {
+            new Float:recSpeed;
+            new RoadClass:rclass = GetConnectionRoadClass(conn, recSpeed);
+            printf("Connection %d RoadClass: %d | Recommended Speed: %.1f km/h", _:conn, _:rclass, recSpeed);
+
+            // Set custom speed limit enforcement (e.g. 50 km/h)
+            SetConnectionSpeedLimit(conn, 50.0);
+            printf("Updated Legal Speed Limit: %.1f km/h", GetConnectionSpeedLimit(conn));
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Example 29: Delta Re-routing & Path Rejoin Point
+// -----------------------------------------------------------------------------
+DemonstrateDeltaRerouting(MapNode:startNode, MapNode:destNode)
+{
+    printf("\n--- [Demo 29: Delta Re-routing & Path Rejoin Point] ---");
+
+    new Path:originalPath, Path:detourPath;
+    if (FindPath(startNode, destNode, originalPath) == GPS_ERROR_NONE)
+    {
+        // Simulate detour by temporarily blocking startNode's first connection target
+        new MapNode:blockNode;
+        GetMapNodeConnectionTarget(startNode, 0, blockNode);
+        SetMapNodeBlocked(blockNode, true);
+
+        if (FindPath(startNode, destNode, detourPath) == GPS_ERROR_NONE)
+        {
+            new divergeStep, rejoinOld, rejoinNew;
+            if (GetPathRejoinPoint(originalPath, detourPath, divergeStep, rejoinOld, rejoinNew) == GPS_ERROR_NONE)
+            {
+                printf("Detour detected! Diverges at step %d, rejoins original path at old step %d (detour step %d)",
+                    divergeStep, rejoinOld, rejoinNew);
+            }
+            DestroyPath(detourPath);
+        }
+
+        SetMapNodeBlocked(blockNode, false);
+        DestroyPath(originalPath);
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Example 30: Height Clearance Limits & Low Bridge Avoidance
+// -----------------------------------------------------------------------------
+DemonstrateHeightClearance(MapNode:startNode, MapNode:destNode)
+{
+    printf("\n--- [Demo 30: Height Clearance Limits (Heavy Vehicles & Low Bridges)] ---");
+
+    // Set a 3.2m bridge clearance in an area
+    SetAreaMaxHeight(1000.0, -1800.0, 1600.0, -1500.0, 3.2);
+
+    // Calculate route for a tall truck of 4.0 meters
+    new Path:truckPath;
+    if (FindPathWithHeightLimit(startNode, destNode, 4.0, truckPath) == GPS_ERROR_NONE)
+    {
+        new Float:len;
+        GetPathLength(truckPath, len);
+        printf("Tall Truck (4.0m) Route: %.1fm (Circumvents low bridges <= 3.2m)", len);
+        DestroyPath(truckPath);
+    }
+
+    // Reset area back to standard clearance
+    SetAreaMaxHeight(1000.0, -1800.0, 1600.0, -1500.0, 0.0);
+}
+
+// -----------------------------------------------------------------------------
 // Main Entry: Executes test suite
 // -----------------------------------------------------------------------------
 main()
@@ -730,6 +901,12 @@ main()
         DemonstrateConvoyOffsets(nodeA, nodeB);
         DemonstrateEvasiveEscape(nodeA, nodeB);
         DemonstrateTollAvoidance(nodeA, nodeB);
+        DemonstrateRoundaboutDetection(nodeA, nodeB);
+        DemonstrateSplineDensification(nodeA, nodeB);
+        DemonstratePavementRouting(nodeA, nodeB);
+        DemonstrateRoadClassAndSpeedLimits(nodeA);
+        DemonstrateDeltaRerouting(nodeA, nodeB);
+        DemonstrateHeightClearance(nodeA, nodeB);
     }
 
     new MapNode:nodeC, MapNode:nodeD;

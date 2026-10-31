@@ -47,6 +47,17 @@ namespace Container
 
 		void SetToll(int id, bool has_toll, int cost);
 		bool GetToll(int id, int& out_cost);
+
+		void SetPaved(int id, bool paved);
+		bool IsPaved(int id);
+
+		RoadClass GetRoadClass(int id);
+		float GetSpeedLimit(int id);
+		void SetSpeedLimit(int id, float speed);
+
+		float GetMaxHeight(int id);
+		void SetMaxHeight(int id, float height);
+		void SetAreaMaxHeight(float minx, float miny, float maxx, float maxy, float height);
 	}
 	
 	namespace Paths

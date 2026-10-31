@@ -28,6 +28,16 @@ public:
 	void setToll(bool has_toll, int cost = 0);
 	int getTollCost() const;
 
+	bool isPaved() const;
+	void setPaved(bool paved);
+
+	RoadClass getRoadClass() const;
+	float getSpeedLimit() const;
+	void setSpeedLimit(float speed);
+
+	float getMaxHeight() const;
+	void setMaxHeight(float height);
+
 	bool getLanePosition(int lane_index, float& out_x, float& out_y, float& out_z) const;
 
 private:
@@ -44,4 +54,7 @@ private:
 	float traffic_multiplier_;
 	bool has_toll_;
 	int toll_cost_;
+	bool is_paved_;
+	float speed_limit_;
+	float max_height_;
 };

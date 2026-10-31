@@ -53,7 +53,16 @@ enum RoutePreference : uint8_t
 	ROUTE_PREF_SAFEST = 3,
 	ROUTE_PREF_ECO = 4,
 	ROUTE_PREF_EVASIVE = 5,
-	ROUTE_PREF_AVOID_TOLLS = 6
+	ROUTE_PREF_AVOID_TOLLS = 6,
+	ROUTE_PREF_PAVED_ONLY = 7
+};
+
+enum RoadClass : uint8_t
+{
+	ROAD_CLASS_ALLEY = 0,
+	ROAD_CLASS_RESIDENTIAL = 1,
+	ROAD_CLASS_AVENUE = 2,
+	ROAD_CLASS_HIGHWAY = 3
 };
 
 enum VehicleCategory : uint8_t
