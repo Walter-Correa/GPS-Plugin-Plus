@@ -14,7 +14,7 @@ jobs:
     name: Build Windows Release
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
           fetch-depth: 0
@@ -60,7 +60,7 @@ jobs:
     name: Build Linux Release
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: recursive
           fetch-depth: 0
@@ -103,11 +103,11 @@ jobs:
   publish-release:
     name: Publish Release
     needs: [build-windows, build-linux]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Read Version
         id: ver
@@ -147,8 +147,7 @@ jobs:
           }
           $body = ($body -join "`n").Trim()
           if (-not $body) { throw "The section of version $v in README.md is empty" }
-          $repo = $env:GITHUB_REPOSITORY
-          $notes = "<details open>`n<summary><b>Changelog of v$v</b></summary>`n`n$body`n`n</details>`n`n---`n**Full history:** https://github.com/$repo/blob/v$v/README.md#version-history"
+          $notes = $body
           [System.IO.File]::WriteAllText((Join-Path $PWD "release-notes.md"), $notes, (New-Object System.Text.UTF8Encoding($false)))
 
       - name: Publish GitHub Release

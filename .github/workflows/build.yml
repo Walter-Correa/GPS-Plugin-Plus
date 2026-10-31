@@ -17,7 +17,7 @@ jobs:
   build-windows-release:
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           clean: true
           submodules: recursive
@@ -70,7 +70,7 @@ jobs:
   build-linux-release:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           clean: true
           submodules: recursive
