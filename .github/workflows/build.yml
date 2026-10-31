@@ -1,4 +1,4 @@
-name: Build & Release
+name: Build
 
 on:
   workflow_dispatch:
@@ -7,8 +7,6 @@ on:
       - "*"
       - "*/*"
       - "**"
-    tags:
-      - "v*"
   pull_request:
     branches:
       - "*"
@@ -121,32 +119,3 @@ jobs:
         with:
           name: GPS-Plugin-Plus-Linux
           path: dist/GPS-Plugin-Plus-Linux.zip
-
-  create-release:
-    needs: [build-windows-release, build-linux-release]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download Windows Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: GPS-Plugin-Plus-Windows
-          path: dist
-
-      - name: Download Linux Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: GPS-Plugin-Plus-Linux
-          path: dist
-
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/GPS-Plugin-Plus-Windows.zip
-            dist/GPS-Plugin-Plus-Linux.zip
-          generate_release_notes: true

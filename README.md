@@ -856,6 +856,72 @@ Each build produces:
 
 ---
 
+## Version history
+
+<details>
+<summary>Show the version history</summary>
+
+### 2.0.0 — 31/10/2026
+- Complete architectural evolution to **GPS Plugin Plus**:
+  - Native **open.mp Component SDK** integration with dual-target compilation (legacy SA-MP plugin and modern open.mp component).
+  - High-performance **2D spatial hash grid** indexing (\text{m} \times 100\text{m}$ cells), reducing spatial node/connection queries from (N)$ linear scans to (1)$ constant-time neighborhood lookups (< 20 nanoseconds per query).
+  - Advanced **orthogonal road snapping & curb positioning**: GetRoadPositionInfo, GetRoadOffsetPosition, GetClosestRoadSegment, and IsPointAgainstTraffic.
+  - Comprehensive **turn-by-turn navigation engine**: GetPathTurnDirection, GetPathNextManeuver, GetPathProgress, and GetPathRemainingInfo.
+  - Dynamic **roadblocks & layer isolation**: CreateRoadblock, DestroyRoadblock, ClearRoadblocks, and SetNodeLayerMask.
+  - Multi-stop **waypoint routing & highway preference**: FindMultiPath, FindMultiPathThreaded, and RoutePreference weighting (ROUTE_PREF_SHORTEST, ROUTE_PREF_FASTEST, ROUTE_PREF_HIGHWAY, ROUTE_PREF_AVOID_HIGHWAYS).
+  - Route decimation and waypoint optimization via **Ramer-Douglas-Peucker algorithm** (GetSimplifiedPathNodes), reducing checkpoint bandwidth by up to 90%.
+  - Real-time **traffic routing & vehicle category constraints**: SetConnectionTrafficWeight, SetVehicleCategoryRestrictions, and FindPathForVehicle.
+  - High-speed **pursuit interception & Pure Pursuit controller**: FindInterceptionPath, FindInterceptionPathThreaded, and CalculatePurePursuitSteering.
+  - Reachability **isochrones & geographic zone dictionary**: GetReachabilityPolygon, RegisterZonePolygon, IsPointInZone, and GetPathTraversedZones.
+  - **Eco-routing & slope elevation climb analysis**: FindEcoPath and GetPathElevationStats.
+  - **Subterranean & tunnel detection**: RegisterTunnelArea, IsPointInTunnel, IsMapNodeUnderground, and GetPathTunnelSegments.
+  - Non-Euclidean **nearest service by real road distance**: FindNearestPointByRoad.
+  - Waze-style **speed cameras & road hazard alerts**: RegisterRoadRadar, GetNextPathRadar, and speed limit enforcement.
+  - Tactical **convoy formations & escort offsets**: GetPathOffsetPosition.
+  - Tactical **pursuit evasion & anti-dead-end routing**: FindEvasivePath and IsMapNodeDeadEnd.
+  - **Toll roads & bridge restrictions**: SetConnectionToll, GetConnectionToll, and FindPathAvoidTolls.
+  - **Roundabout & rotary exit detection**: GetPathRoundaboutInfo.
+  - **Catmull-Rom cubic spline interpolation**: GetSmoothPathPoints for smooth NPC driving and camera rails.
+  - **Pavement classification**: IsConnectionPaved, SetConnectionPaved, and FindPathPavedOnly.
+  - **Road speed classification**: GetConnectionRoadClass, SetConnectionSpeedLimit, and GetConnectionSpeedLimit.
+  - **Delta re-routing & divergence detection**: GetPathRejoinPoint.
+  - **Vehicle height clearance & low-bridge avoidance**: SetConnectionMaxHeight, SetAreaMaxHeight, and FindPathWithHeightLimit.
+  - **Path memory management & serialization**: SetPathAutoDestroy, SavePathToFile, LoadPathFromFile, ExportPathToString, and ImportPathFromString.
+  - Full asynchronous support for **PawnPlus tasks** with PathType and RoutePreference.
+  - Formal adoption of the **Mozilla Public License 2.0 (MPL-2.0)** and standalone build packages.
+
+### 1.4.1 — 24/01/2023
+- Gracefully handle missing server.cfg without throwing exceptions.
+- Renamed INVALID_PATH_ID to INVALID_GPS_PATH_ID to prevent naming collisions with open.mp standard libraries.
+- CMake build pipeline improvements and multiplatform CI integration.
+
+### 1.4.0 — 21/04/2019
+- Modern refactoring and enhanced thread-safety.
+- Added option to disable automatic map node loading on server startup via gps_load_nodes.
+- Fixed node and connection deletion edge cases.
+
+### 1.3.0 — 12/03/2019
+- Rewrote file parsing using optimized streams.
+- Improved A* pathfinding heuristics and memory footprint.
+- Added GetPathNodeIndex.
+
+### 1.2.0 — 28/01/2019
+- Fixed critical pathfinding algorithm issues, delivering up to 30x faster query execution.
+- Major refactoring of internal path structures.
+
+### 1.1.0 — 15/01/2019
+- Added GetRandomMapNode and intersection detection.
+- Introduced custom callback parameter passing for threaded pathfinding.
+
+### 1.0.0 — 05/01/2019
+- Initial release of samp-gps-plugin.
+- Basic A* pathfinding using GPS.dat dataset.
+- Threaded path calculation using std::thread.
+
+</details>
+
+---
+
 ## Credits & Acknowledgements
 
 * [@Walter-Correa](https://github.com/Walter-Correa) - Current maintainer, 2D spatial hash grid optimization, open.mp native component integration, road snapping & curb alignment, turn directions & ETA calculations, dynamic roadblocks, layer isolation, and documentation.

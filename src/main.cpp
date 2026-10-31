@@ -19,6 +19,8 @@ PLUGIN_EXPORT bool PLUGIN_CALL Load(void **ppData)
 	pAMXFunctions = ppData[PLUGIN_DATA_AMX_EXPORTS];
 	logprintf = (logprintf_t)(ppData[PLUGIN_DATA_LOGPRINTF]);
 
+	logprintf("[GPS-Plugin-Plus]: v2.0.0 loaded.");
+
 	auto config = ConfigReader("server.cfg");
 
 	if (config.getValue<int>("gps_load_nodes", 1) != 0)
