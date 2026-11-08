@@ -1,10 +1,15 @@
 #include <map>
 #include <thread>
+#include <shared_mutex>
+#include <mutex>
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <random>
 #include <algorithm>
+#include <charconv>
+#include <memory>
+#include <chrono>
 
 #include "natives.h"
 #include "callback.h"
@@ -16,20 +21,49 @@
 #include "zones.h"
 #include "tunnels.h"
 #include "radars.h"
+#include "worker_pool.h"
+#include "pawn_utils.h"
 
 
 namespace Natives
 {
 	std::mt19937 mersenne{ std::random_device{}() };
 
+	using PawnUtils::WriteRef;
+
+	inline bool IsValidPathType(int type, bool allow_any = true)
+	{
+		if (allow_any)
+		{
+			return type >= PATH_TYPE_ANY && type <= PATH_TYPE_BOAT;
+		}
+		return type >= PATH_TYPE_VEHICLE && type <= PATH_TYPE_BOAT;
+	}
+
+	inline bool IsValidRoutePref(int pref)
+	{
+		return pref >= ROUTE_PREF_SHORTEST && pref <= ROUTE_PREF_PAVED_ONLY;
+	}
+
+	inline bool IsValidVehicleCat(int cat)
+	{
+		return cat >= VEHICLE_CAT_STANDARD && cat <= VEHICLE_CAT_MOTORCYCLE;
+	}
+
+	inline bool IsValidRoadClass(int cls)
+	{
+		return cls >= ROAD_CLASS_ALLEY && cls <= ROAD_CLASS_HIGHWAY;
+	}
+
+	static inline Path* FindPathLocked(int id)
+	{
+		return Container::Paths::FindLocked(id);
+	}
+
 
 	cell AMX_NATIVE_CALL CreateMapNode(AMX* amx, cell* params)
 	{
-		if (params[0] < (4 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 4 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(4);
 
 		const auto x = amx_ctof(params[1]), y = amx_ctof(params[2]), z = amx_ctof(params[3]);
 		auto type = PATH_TYPE_VEHICLE;
@@ -37,6 +71,10 @@ namespace Natives
 
 		if (params[0] >= (5 * 4))
 		{
+			if (!IsValidPathType(params[5], false))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			type = static_cast<PathType>(params[5]);
 		}
 
@@ -45,16 +83,17 @@ namespace Natives
 			flags = static_cast<PathNodeFlags>(params[6]);
 		}
 
-		Container::LockExclusive();
+		int id;
+		{
+			Container::GraphWriterLock lock(Container::GetGraphMutex());
+			id = Container::Nodes::AllocateID();
+			Container::Nodes::Add(id, x, y, z, type, flags);
+		}
 
-		const auto id = Container::Nodes::AllocateID();
-
-		Container::Nodes::Add(id, x, y, z, type, flags);
-		Container::UnlockExclusive();
-
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[4], &address);
-		*address = id;
+		if (!WriteRef(amx, params[4], id))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -72,9 +111,10 @@ namespace Natives
 			return GPS_ERROR_INVALID_NODE;
 		}
 
-		Container::LockExclusive();
-		Container::Nodes::SetForDeletion(node);
-		Container::UnlockExclusive();
+		{
+			Container::GraphWriterLock lock(Container::GetGraphMutex());
+			Container::Nodes::SetForDeletion(node);
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -104,16 +144,12 @@ namespace Natives
 
 		auto x = node->getX(), y = node->getY(), z = node->getZ();
 
-		cell* address = nullptr;
-
-		amx_GetAddr(amx, params[2], &address);
-		*address = amx_ftoc(x);
-
-		amx_GetAddr(amx, params[3], &address);
-		*address = amx_ftoc(y);
-
-		amx_GetAddr(amx, params[4], &address);
-		*address = amx_ftoc(z);
+		if (!WriteRef(amx, params[2], x) ||
+		    !WriteRef(amx, params[3], y) ||
+		    !WriteRef(amx, params[4], z))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -147,9 +183,10 @@ namespace Natives
 			return GPS_ERROR_INVALID_NODE;
 		}
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[2], &address);
-		*address = static_cast<cell>(node->getFlags());
+		if (!WriteRef(amx, params[2], node->getFlags()))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -157,11 +194,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL CreateConnection(AMX* amx, cell* params)
 	{
-		if (params[0] < (3 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(3);
 
 		const auto source_id = static_cast<int>(params[1]);
 		const auto target_id = static_cast<int>(params[2]);
@@ -191,18 +224,21 @@ namespace Natives
 			one_way = params[7] != 0;
 		}
 
-		Container::LockExclusive();
-		const auto id = Container::Connections::Add(source_id, target_id, road_width, left_lanes, right_lanes, one_way);
-		Container::UnlockExclusive();
+		int id;
+		{
+			Container::GraphWriterLock lock(Container::GetGraphMutex());
+			id = Container::Connections::Add(source_id, target_id, road_width, left_lanes, right_lanes, one_way);
+		}
 
 		if (id == -1)
 		{
 			return GPS_ERROR_INVALID_NODE;
 		}
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[3], &address);
-		*address = id;
+		if (!WriteRef(amx, params[3], id))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -220,9 +256,10 @@ namespace Natives
 			return GPS_ERROR_INVALID_CONNECTION;
 		}
 
-		Container::LockExclusive();
-		Container::Connections::Delete(connection);
-		Container::UnlockExclusive();
+		{
+			Container::GraphWriterLock lock(Container::GetGraphMutex());
+			Container::Connections::Delete(connection);
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -240,9 +277,10 @@ namespace Natives
 			return GPS_ERROR_INVALID_CONNECTION;
 		}
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[2], &address);
-		*address = connection->getSource()->getID();
+		if (!WriteRef(amx, params[2], connection->getSource()->getID()))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -260,9 +298,10 @@ namespace Natives
 			return GPS_ERROR_INVALID_CONNECTION;
 		}
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[2], &address);
-		*address = connection->getTarget()->getID();
+		if (!WriteRef(amx, params[2], connection->getTarget()->getID()))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -280,17 +319,14 @@ namespace Natives
 			return GPS_ERROR_INVALID_CONNECTION;
 		}
 
-		cell* address = nullptr;
-
-		amx_GetAddr(amx, params[2], &address);
 		auto road_width = connection->getRoadWidth();
-		*address = amx_ftoc(road_width);
 
-		amx_GetAddr(amx, params[3], &address);
-		*address = connection->getLeftLanes();
-
-		amx_GetAddr(amx, params[4], &address);
-		*address = connection->getRightLanes();
+		if (!WriteRef(amx, params[2], road_width) ||
+		    !WriteRef(amx, params[3], connection->getLeftLanes()) ||
+		    !WriteRef(amx, params[4], connection->getRightLanes()))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -316,16 +352,12 @@ namespace Natives
 			return GPS_ERROR_INTERNAL;
 		}
 
-		cell* address = nullptr;
-
-		amx_GetAddr(amx, params[3], &address);
-		*address = amx_ftoc(x);
-
-		amx_GetAddr(amx, params[4], &address);
-		*address = amx_ftoc(y);
-
-		amx_GetAddr(amx, params[5], &address);
-		*address = amx_ftoc(z);
+		if (!WriteRef(amx, params[3], x) ||
+		    !WriteRef(amx, params[4], y) ||
+		    !WriteRef(amx, params[5], z))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -353,6 +385,10 @@ namespace Natives
 
 		if (params[0] >= (1 * 4))
 		{
+			if (!IsValidPathType(params[1], true))
+			{
+				return INVALID_NODE_ID;
+			}
 			type = static_cast<PathType>(params[1]);
 		}
 
@@ -362,16 +398,16 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL GetRandomMapNode(AMX* amx, cell* params)
 	{
-		if (params[0] < (1 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 1 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(1);
 
 		auto type = PATH_TYPE_VEHICLE;
 
 		if (params[0] >= (2 * 4))
 		{
+			if (!IsValidPathType(params[2], true))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			type = static_cast<PathType>(params[2]);
 		}
 
@@ -402,37 +438,17 @@ namespace Natives
 			}
 		}
 
-		std::vector<std::pair<int, Node*>> filtered_nodes;
-
-		for (const auto& node : Container::Nodes::GetAll())
+		Node* node = Container::Nodes::GetRandomNode(type, min_z, max_z);
+		if (node == nullptr)
 		{
-			if (node.second->isSetForDeletion() || node.second->getType() != type)
-			{
-				continue;
-			}
-
-			const float z = node.second->getZ();
-			if (z < min_z || z > max_z)
-			{
-				continue;
-			}
-
-			filtered_nodes.push_back(node);
-		}
-
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[1], &address);
-
-		if (filtered_nodes.empty())
-		{
-			*address = INVALID_NODE_ID;
+			WriteRef(amx, params[1], INVALID_NODE_ID);
 			return GPS_ERROR_INVALID_NODE;
 		}
 
-		std::vector<std::pair<int, Node*>> result;
-		std::sample(filtered_nodes.begin(), filtered_nodes.end(), std::back_inserter(result), 1, mersenne);
-
-		*address = result.at(0).second->getID();
+		if (!WriteRef(amx, params[1], node->getID()))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -440,11 +456,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL GetRandomMapNodeFromArea(AMX* amx, cell* params)
 	{
-		if (params[0] < (5 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 5 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(5);
 
 		const float min_x = std::min(amx_ctof(params[1]), amx_ctof(params[3]));
 		const float max_x = std::max(amx_ctof(params[1]), amx_ctof(params[3]));
@@ -455,6 +467,10 @@ namespace Natives
 
 		if (params[0] >= (6 * 4))
 		{
+			if (!IsValidPathType(params[6], true))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			type = static_cast<PathType>(params[6]);
 		}
 
@@ -485,36 +501,17 @@ namespace Natives
 			}
 		}
 
-		std::vector<int> filtered_ids;
-
-		for (const auto& node : Container::Nodes::GetAll())
+		Node* node = Container::Nodes::GetRandomNodeInArea(min_x, min_y, max_x, max_y, type, min_z, max_z);
+		if (node == nullptr)
 		{
-			if (node.second->isSetForDeletion() || node.second->getType() != type)
-			{
-				continue;
-			}
-
-			const float x = node.second->getX();
-			const float y = node.second->getY();
-			const float z = node.second->getZ();
-
-			if (x >= min_x && x <= max_x && y >= min_y && y <= max_y && z >= min_z && z <= max_z)
-			{
-				filtered_ids.push_back(node.first);
-			}
-		}
-
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[5], &address);
-
-		if (filtered_ids.empty())
-		{
-			*address = INVALID_NODE_ID;
+			WriteRef(amx, params[5], INVALID_NODE_ID);
 			return GPS_ERROR_INVALID_NODE;
 		}
 
-		std::uniform_int_distribution<size_t> dist(0, filtered_ids.size() - 1);
-		*address = filtered_ids[dist(mersenne)];
+		if (!WriteRef(amx, params[5], node->getID()))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -532,9 +529,10 @@ namespace Natives
 			return GPS_ERROR_INVALID_NODE;
 		}
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[2], &address);
-		*address = node->getConnections().size();
+		if (!WriteRef(amx, params[2], node->getConnections().size()))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -553,16 +551,17 @@ namespace Natives
 		}
 
 		const auto index = static_cast<unsigned int>(params[2]);
-		const auto connections = node->getConnections();
+		const auto& connections = node->getConnections();
 
 		if (connections.size() <= index)
 		{
 			return GPS_ERROR_INVALID_CONNECTION;
 		}
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[3], &address);
-		*address = connections.at(index)->getId();
+		if (!WriteRef(amx, params[3], connections[index]->getId()))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -592,15 +591,16 @@ namespace Natives
 		{
 			if (connection->getTarget() == target)
 			{
-				cell* address = nullptr;
-				amx_GetAddr(amx, params[3], &address);
-				*address = connection->getId();
+				if (!WriteRef(amx, params[3], connection->getId()))
+				{
+					return GPS_ERROR_INVALID_PARAMS;
+				}
 
 				return GPS_ERROR_NONE;
 			}
 		}
 
-		return GPS_ERROR_INVALID_NODE;
+		return GPS_ERROR_INVALID_CONNECTION;
 	}
 
 
@@ -626,9 +626,10 @@ namespace Natives
 
 		auto distance = first->getDistanceFromNode(second);
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[3], &address);
-		*address = amx_ftoc(distance);
+		if (!WriteRef(amx, params[3], distance))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -636,11 +637,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL GetAngleBetweenMapNodes(AMX* amx, cell* params)
 	{
-		if (params[0] < (3 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(3);
 
 		const auto first_id = static_cast<int>(params[1]);
 		const auto first = Container::Nodes::Find(first_id);
@@ -662,9 +659,10 @@ namespace Natives
 
 		const auto angle = first->getAngleFromNode(second, facing_angle);
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[3], &address);
-		*address = amx_ftoc(angle);
+		if (!WriteRef(amx, params[3], angle))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -686,9 +684,10 @@ namespace Natives
 
 		auto distance = node->getDistanceFromPoint(x, y, z);
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[5], &address);
-		*address = amx_ftoc(distance);
+		if (!WriteRef(amx, params[5], distance))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -696,11 +695,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL GetMapNodeAngleFromPoint(AMX* amx, cell* params)
 	{
-		if (params[0] < (4 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 4 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(4);
 
 		const auto id = static_cast<int>(params[1]);
 		const auto node = Container::Nodes::Find(id);
@@ -715,9 +710,10 @@ namespace Natives
 
 		const auto angle = node->getAngleFromPoint(x, y, facing_angle);
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[4], &address);
-		*address = amx_ftoc(angle);
+		if (!WriteRef(amx, params[4], angle))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -736,17 +732,30 @@ namespace Natives
 
 		if (params[0] >= (6 * 4))
 		{
+			if (!IsValidPathType(params[6], true))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			type = static_cast<PathType>(params[6]);
 		}
 
-		Container::LockShared();
-		const auto node = Container::Nodes::FindClosest(x, y, z, type, ignored);
-		const auto result = (node != nullptr) ? node->getID() : INVALID_NODE_ID;
-		Container::UnlockShared();
+		int result = INVALID_NODE_ID;
+		{
+			std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+			const auto node = Container::Nodes::FindClosest(x, y, z, type, ignored);
+			result = (node != nullptr) ? node->getID() : INVALID_NODE_ID;
+		}
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[4], &address);
-		*address = result;
+		if (result == INVALID_NODE_ID)
+		{
+			WriteRef(amx, params[4], INVALID_NODE_ID);
+			return GPS_ERROR_INVALID_NODE;
+		}
+
+		if (!WriteRef(amx, params[4], result))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -754,11 +763,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL GetClosestMapNodeToPoint(AMX* amx, cell* params)
 	{
-		if (params[0] < (4 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 4 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(4);
 
 		return FindClosestNodeInternal(amx, params, PATH_TYPE_VEHICLE);
 	}
@@ -769,6 +774,10 @@ namespace Natives
 		CHECK_PARAMS(1);
 
 		const auto filename = amx_GetCppString(amx, params[1]);
+		if (!File::IsSafeFilePath(filename))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		if (File::SaveNodes(filename))
 		{
@@ -801,25 +810,34 @@ namespace Natives
 
 		if (params[0] >= (4 * 4))
 		{
+			if (!IsValidPathType(params[4], true))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			type = static_cast<PathType>(params[4]);
 		}
 
 		auto pref = ROUTE_PREF_SHORTEST;
 		if (params[0] >= (5 * 4))
 		{
+			if (!IsValidRoutePref(params[5]))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			pref = static_cast<RoutePreference>(params[5]);
 		}
 
-		const auto result = Pathfinder::FindPath(start, target, type, pref);
+		const auto result = Pathfinder::FindPath(start, target, type, pref, VEHICLE_CAT_STANDARD, amx);
 
 		if (result == -1)
 		{
 			return GPS_ERROR_INVALID_PATH;
 		}
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[3], &address);
-		*address = result;
+		if (!WriteRef(amx, params[3], result))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -827,11 +845,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL FindPath(AMX* amx, cell* params)
 	{
-		if (params[0] < (3 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(3);
 
 		return FindPathInternalWrapper(amx, params, PATH_TYPE_VEHICLE);
 	}
@@ -839,17 +853,16 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL FindMultiStopPath(AMX* amx, cell* params)
 	{
-		if (params[0] < (3 * 4))
+		CHECK_PARAMS_MIN(3);
+
+		const auto count = static_cast<int>(params[2]);
+		if (count < 2 || count > 64)
 		{
-			std::cout << __func__ << ": Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
 			return GPS_ERROR_INVALID_PARAMS;
 		}
 
-		cell* stops_addr = nullptr;
-		amx_GetAddr(amx, params[1], &stops_addr);
-		const auto count = static_cast<int>(params[2]);
-
-		if (count < 2 || stops_addr == nullptr)
+		cell* stops_addr = PawnUtils::GetArray(amx, params[1], count);
+		if (stops_addr == nullptr)
 		{
 			return GPS_ERROR_INVALID_PARAMS;
 		}
@@ -863,12 +876,20 @@ namespace Natives
 		auto type = PATH_TYPE_VEHICLE;
 		if (params[0] >= (5 * 4))
 		{
+			if (!IsValidPathType(params[5], true))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			type = static_cast<PathType>(params[5]);
 		}
 
 		auto pref = ROUTE_PREF_SHORTEST;
 		if (params[0] >= (6 * 4))
 		{
+			if (!IsValidRoutePref(params[6]))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			pref = static_cast<RoutePreference>(params[6]);
 		}
 
@@ -886,15 +907,16 @@ namespace Natives
 			stop_nodes.push_back(node);
 		}
 
-		const int path_id = Pathfinder::FindMultiStopPath(stop_nodes, optimize_order, type, pref);
+		const int path_id = Pathfinder::FindMultiStopPath(stop_nodes, optimize_order, type, pref, amx);
 		if (path_id == INVALID_PATH_ID)
 		{
 			return GPS_ERROR_INVALID_PATH;
 		}
 
-		cell* out_addr = nullptr;
-		amx_GetAddr(amx, params[3], &out_addr);
-		*out_addr = path_id;
+		if (!WriteRef(amx, params[3], path_id))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -903,39 +925,60 @@ namespace Natives
 	static cell FindPathThreadedInternal(AMX* amx, cell* params, PathType type, RoutePreference pref, int format_param_index)
 	{
 		const auto start_id = static_cast<int>(params[1]);
-		auto start = Container::Nodes::Find(start_id);
-
-		if (start == nullptr)
-		{
-			return GPS_ERROR_INVALID_NODE;
-		}
-
 		const auto target_id = static_cast<int>(params[2]);
-		auto target = Container::Nodes::Find(target_id);
 
-		if (target == nullptr)
 		{
-			return GPS_ERROR_INVALID_NODE;
+			std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+			auto start = Container::Nodes::Find(start_id);
+			if (start == nullptr)
+			{
+				return GPS_ERROR_INVALID_NODE;
+			}
+
+			auto target = Container::Nodes::Find(target_id);
+			if (target == nullptr)
+			{
+				return GPS_ERROR_INVALID_NODE;
+			}
 		}
 
 		const auto callback_name = amx_GetCppString(amx, params[format_param_index - 1]);
 
 		char* format = nullptr;
-		if (params[0] >= (format_param_index * sizeof(cell)))
+		if (params[0] >= static_cast<cell>(format_param_index * sizeof(cell)))
 		{
 			amx_StrParam(amx, params[format_param_index], format);
 		}
 
-		auto callback = new Callback(AmxHandler::GetAmx(amx), callback_name, format, params, format_param_index);
-
-		try
+		auto amx_obj = AmxHandler::GetAmx(amx);
+		if (amx_obj == nullptr)
 		{
-			std::thread t([=]() { Pathfinder::FindPathThreaded(start, target, callback, type, pref); });
-			t.detach();
+			return GPS_ERROR_INTERNAL;
 		}
-		catch (std::exception &e)
+
+		const uint64_t serial = amx_obj->getLoadSerial();
+		auto callback = new Callback(amx, serial, callback_name, format, params, format_param_index);
+		if (!callback->isValid())
 		{
-			std::cout << "Failed to dispatch thread: " << e.what() << "\n";
+			delete callback;
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		PathJob job;
+		job.start_id = start_id;
+		job.target_id = target_id;
+		job.type = type;
+		job.pref = pref;
+		job.cat = VEHICLE_CAT_STANDARD;
+		job.amx = amx;
+		job.amx_serial = serial;
+		job.callback = callback;
+		job.yield_count = 0;
+		job.first_attempt_time = std::chrono::steady_clock::time_point{};
+
+		if (!WorkerPool::EnqueueJob(std::move(job)))
+		{
+			delete callback;
 			return GPS_ERROR_INTERNAL;
 		}
 
@@ -945,11 +988,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL FindPathThreaded(AMX* amx, cell* params)
 	{
-		if (params[0] < (3 * 4))
-		{
-			std::cout << "FindPathThreaded: Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(3);
 
 		return FindPathThreadedInternal(amx, params, PATH_TYPE_VEHICLE, ROUTE_PREF_SHORTEST, 4);
 	}
@@ -957,21 +996,21 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL FindPathThreadedEx(AMX* amx, cell* params)
 	{
-		if (params[0] < (4 * 4))
+		CHECK_PARAMS_MIN(5);
+
+		if (!IsValidPathType(params[3], true))
 		{
-			std::cout << "FindPathThreadedEx: Expecting at least 4 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
 			return GPS_ERROR_INVALID_PARAMS;
 		}
-
 		const auto type = static_cast<PathType>(params[3]);
 
-		if (params[0] >= (5 * 4) && params[4] >= 0 && params[4] <= ROUTE_PREF_PAVED_ONLY)
+		if (!IsValidRoutePref(params[4]))
 		{
-			const auto pref = static_cast<RoutePreference>(params[4]);
-			return FindPathThreadedInternal(amx, params, type, pref, 6);
+			return GPS_ERROR_INVALID_PARAMS;
 		}
+		const auto pref = static_cast<RoutePreference>(params[4]);
 
-		return FindPathThreadedInternal(amx, params, type, ROUTE_PREF_SHORTEST, 5);
+		return FindPathThreadedInternal(amx, params, type, pref, 6);
 	}
 
 
@@ -980,10 +1019,7 @@ namespace Natives
 		CHECK_PARAMS(1);
 
 		const auto id = static_cast<int>(params[1]);
-
-		Container::LockShared();
-		const auto path = Container::Paths::Find(id);
-		Container::UnlockShared();
+		const auto path = FindPathLocked(id);
 
 		return path != nullptr;
 	}
@@ -994,19 +1030,17 @@ namespace Natives
 		CHECK_PARAMS(2);
 
 		const auto id = static_cast<int>(params[1]);
-
-		Container::LockShared();
-		const auto path = Container::Paths::Find(id);
-		Container::UnlockShared();
+		const auto path = FindPathLocked(id);
 
 		if (path == nullptr)
 		{
 			return GPS_ERROR_INVALID_PATH;
 		}
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[2], &address);
-		*address = path->getNodes().size();
+		if (!WriteRef(amx, params[2], path->getNodes().size()))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -1017,10 +1051,7 @@ namespace Natives
 		CHECK_PARAMS(2);
 
 		const auto id = static_cast<int>(params[1]);
-
-		Container::LockShared();
-		const auto path = Container::Paths::Find(id);
-		Container::UnlockShared();
+		const auto path = FindPathLocked(id);
 
 		if (path == nullptr)
 		{
@@ -1029,9 +1060,10 @@ namespace Natives
 
 		auto result = path->getLength();
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[2], &address);
-		*address = amx_ftoc(result);
+		if (!WriteRef(amx, params[2], result))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -1042,10 +1074,7 @@ namespace Natives
 		CHECK_PARAMS(3);
 
 		const auto id = static_cast<int>(params[1]);
-
-		Container::LockShared();
-		const auto path = Container::Paths::Find(id);
-		Container::UnlockShared();
+		const auto path = FindPathLocked(id);
 
 		if (path == nullptr)
 		{
@@ -1053,16 +1082,17 @@ namespace Natives
 		}
 
 		const auto index = static_cast<unsigned int>(params[2]);
-		auto nodes = path->getNodes();
+		const auto& nodes = path->getNodes();
 
 		if (index >= nodes.size())
 		{
 			return GPS_ERROR_INVALID_NODE;
 		}
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[3], &address);
-		*address = nodes.at(index)->getID();
+		if (!WriteRef(amx, params[3], nodes[index]->getID()))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -1073,10 +1103,7 @@ namespace Natives
 		CHECK_PARAMS(3);
 
 		const auto id = static_cast<int>(params[1]);
-
-		Container::LockShared();
-		const auto path = Container::Paths::Find(id);
-		Container::UnlockShared();
+		const auto path = FindPathLocked(id);
 
 		if (path == nullptr)
 		{
@@ -1098,9 +1125,10 @@ namespace Natives
 			return GPS_ERROR_INVALID_NODE;
 		}
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[3], &address);
-		*address = index;
+		if (!WriteRef(amx, params[3], index))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -1111,10 +1139,7 @@ namespace Natives
 		CHECK_PARAMS(6);
 
 		const auto id = static_cast<int>(params[1]);
-
-		Container::LockShared();
-		const auto path = Container::Paths::Find(id);
-		Container::UnlockShared();
+		const auto path = FindPathLocked(id);
 
 		if (path == nullptr)
 		{
@@ -1123,19 +1148,19 @@ namespace Natives
 
 		const auto index = static_cast<unsigned int>(params[2]);
 		const auto lane_index = static_cast<int>(params[3]);
-		const auto nodes = path->getNodes();
+		const auto& nodes = path->getNodes();
 
 		if (index >= nodes.size())
 		{
 			return GPS_ERROR_INVALID_NODE;
 		}
 
-		auto current_node = nodes.at(index);
+		auto current_node = nodes[index];
 		Connection* connection = nullptr;
 
 		if (index + 1 < nodes.size())
 		{
-			auto next_node = nodes.at(index + 1);
+			auto next_node = nodes[index + 1];
 			for (auto conn : current_node->getConnections())
 			{
 				if (conn->getTarget() == next_node)
@@ -1147,7 +1172,7 @@ namespace Natives
 		}
 		else if (index > 0)
 		{
-			auto prev_node = nodes.at(index - 1);
+			auto prev_node = nodes[index - 1];
 			for (auto conn : prev_node->getConnections())
 			{
 				if (conn->getTarget() == current_node)
@@ -1165,16 +1190,12 @@ namespace Natives
 			connection->getLanePosition(lane_index, x, y, z);
 		}
 
-		cell* address = nullptr;
-
-		amx_GetAddr(amx, params[4], &address);
-		*address = amx_ftoc(x);
-
-		amx_GetAddr(amx, params[5], &address);
-		*address = amx_ftoc(y);
-
-		amx_GetAddr(amx, params[6], &address);
-		*address = amx_ftoc(z);
+		if (!WriteRef(amx, params[4], x) ||
+		    !WriteRef(amx, params[5], y) ||
+		    !WriteRef(amx, params[6], z))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -1185,19 +1206,14 @@ namespace Natives
 		CHECK_PARAMS(1);
 
 		const auto id = static_cast<int>(params[1]);
-
-		Container::LockShared();
-		const auto path = Container::Paths::Find(id);
-		Container::UnlockShared();
+		const auto path = FindPathLocked(id);
 
 		if (path == nullptr)
 		{
 			return GPS_ERROR_INVALID_PATH;
 		}
 
-		Container::LockExclusive();
 		Container::Paths::Delete(path);
-		Container::UnlockExclusive();
 
 		return GPS_ERROR_NONE;
 	}
@@ -1210,17 +1226,14 @@ namespace Natives
 		const auto id = static_cast<int>(params[1]);
 		const auto blocked = params[2] != 0;
 
-		Container::LockShared();
 		const auto node = Container::Nodes::Find(id);
 
 		if (node == nullptr)
 		{
-			Container::UnlockShared();
 			return GPS_ERROR_INVALID_NODE;
 		}
 
 		node->setBlocked(blocked);
-		Container::UnlockShared();
 
 		return GPS_ERROR_NONE;
 	}
@@ -1232,19 +1245,14 @@ namespace Natives
 
 		const auto id = static_cast<int>(params[1]);
 
-		Container::LockShared();
 		const auto node = Container::Nodes::Find(id);
 
 		if (node == nullptr)
 		{
-			Container::UnlockShared();
 			return 0;
 		}
 
-		const auto blocked = node->isBlocked();
-		Container::UnlockShared();
-
-		return blocked ? 1 : 0;
+		return node->isBlocked() ? 1 : 0;
 	}
 
 
@@ -1255,17 +1263,14 @@ namespace Natives
 		const auto id = static_cast<int>(params[1]);
 		const auto blocked = params[2] != 0;
 
-		Container::LockShared();
 		const auto connection = Container::Connections::Find(id);
 
 		if (connection == nullptr)
 		{
-			Container::UnlockShared();
 			return GPS_ERROR_INVALID_CONNECTION;
 		}
 
 		connection->setBlocked(blocked);
-		Container::UnlockShared();
 
 		return GPS_ERROR_NONE;
 	}
@@ -1277,67 +1282,60 @@ namespace Natives
 
 		const auto id = static_cast<int>(params[1]);
 
-		Container::LockShared();
 		const auto connection = Container::Connections::Find(id);
 
 		if (connection == nullptr)
 		{
-			Container::UnlockShared();
 			return 0;
 		}
 
-		const auto blocked = connection->isBlocked();
-		Container::UnlockShared();
-
-		return blocked ? 1 : 0;
+		return connection->isBlocked() ? 1 : 0;
 	}
 
 
 	cell AMX_NATIVE_CALL GetClosestPointOnRoad(AMX* amx, cell* params)
 	{
-		if (params[0] < (7 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 7 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(7);
 
 		const auto x = amx_ctof(params[1]), y = amx_ctof(params[2]), z = amx_ctof(params[3]);
 		auto type = PATH_TYPE_VEHICLE;
 
 		if (params[0] >= (9 * 4))
 		{
+			if (!IsValidPathType(params[9], true))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			type = static_cast<PathType>(params[9]);
 		}
 
 		float out_x = 0.0f, out_y = 0.0f, out_z = 0.0f, out_angle = 0.0f, out_road_width = 8.0f;
 		int out_conn_id = INVALID_CONNECTION_ID;
-
-		Container::LockShared();
-		const auto success = Container::Connections::FindClosestRoadPoint(x, y, z, out_x, out_y, out_z, out_angle, out_road_width, out_conn_id, type);
-		Container::UnlockShared();
+		bool success = false;
+		{
+			std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+			success = Container::Connections::FindClosestRoadPoint(x, y, z, out_x, out_y, out_z, out_angle, out_road_width, out_conn_id, type);
+		}
 
 		if (!success)
 		{
 			return GPS_ERROR_INVALID_NODE;
 		}
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[4], &address);
-		*address = amx_ftoc(out_x);
-
-		amx_GetAddr(amx, params[5], &address);
-		*address = amx_ftoc(out_y);
-
-		amx_GetAddr(amx, params[6], &address);
-		*address = amx_ftoc(out_z);
-
-		amx_GetAddr(amx, params[7], &address);
-		*address = amx_ftoc(out_angle);
+		if (!WriteRef(amx, params[4], out_x) ||
+		    !WriteRef(amx, params[5], out_y) ||
+		    !WriteRef(amx, params[6], out_z) ||
+		    !WriteRef(amx, params[7], out_angle))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		if (params[0] >= (8 * 4))
 		{
-			amx_GetAddr(amx, params[8], &address);
-			*address = out_conn_id;
+			if (!WriteRef(amx, params[8], out_conn_id))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 		}
 
 		return GPS_ERROR_NONE;
@@ -1346,11 +1344,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL GetRoadPositionInfo(AMX* amx, cell* params)
 	{
-		if (params[0] < (8 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 8 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(8);
 
 		const auto x = amx_ctof(params[1]), y = amx_ctof(params[2]), z = amx_ctof(params[3]);
 		int curb = 0;
@@ -1359,19 +1353,28 @@ namespace Natives
 		if (params[0] >= (9 * 4))
 		{
 			curb = static_cast<int>(params[9]);
+			if (curb < 0 || curb > 2)
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 		}
 
 		if (params[0] >= (10 * 4))
 		{
+			if (!IsValidPathType(params[10], true))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			type = static_cast<PathType>(params[10]);
 		}
 
 		float out_x = 0.0f, out_y = 0.0f, out_z = 0.0f, out_angle = 0.0f, out_road_width = 8.0f;
 		int out_conn_id = INVALID_CONNECTION_ID;
-
-		Container::LockShared();
-		const auto success = Container::Connections::FindClosestRoadPoint(x, y, z, out_x, out_y, out_z, out_angle, out_road_width, out_conn_id, type);
-		Container::UnlockShared();
+		bool success = false;
+		{
+			std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+			success = Container::Connections::FindClosestRoadPoint(x, y, z, out_x, out_y, out_z, out_angle, out_road_width, out_conn_id, type);
+		}
 
 		if (!success)
 		{
@@ -1386,21 +1389,14 @@ namespace Natives
 			out_y += offset * std::cos(-lateral_angle);
 		}
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[4], &address);
-		*address = amx_ftoc(out_x);
-
-		amx_GetAddr(amx, params[5], &address);
-		*address = amx_ftoc(out_y);
-
-		amx_GetAddr(amx, params[6], &address);
-		*address = amx_ftoc(out_z);
-
-		amx_GetAddr(amx, params[7], &address);
-		*address = amx_ftoc(out_angle);
-
-		amx_GetAddr(amx, params[8], &address);
-		*address = amx_ftoc(out_road_width);
+		if (!WriteRef(amx, params[4], out_x) ||
+		    !WriteRef(amx, params[5], out_y) ||
+		    !WriteRef(amx, params[6], out_z) ||
+		    !WriteRef(amx, params[7], out_angle) ||
+		    !WriteRef(amx, params[8], out_road_width))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -1415,61 +1411,59 @@ namespace Natives
 
 		float out_x = 0.0f, out_y = 0.0f, out_z = 0.0f, out_angle = 0.0f, out_road_width = 8.0f;
 		int out_conn_id = INVALID_CONNECTION_ID;
-
-		Container::LockShared();
-		const auto success = Container::Connections::FindClosestRoadPoint(x, y, z, out_x, out_y, out_z, out_angle, out_road_width, out_conn_id, PATH_TYPE_VEHICLE);
-
-		if (!success)
-		{
-			Container::UnlockShared();
-			return GPS_ERROR_INVALID_CONNECTION;
-		}
-
-		const auto conn = Container::Connections::Find(out_conn_id);
-		if (conn == nullptr || conn->getSource() == nullptr || conn->getTarget() == nullptr)
-		{
-			Container::UnlockShared();
-			return GPS_ERROR_INVALID_CONNECTION;
-		}
-
-		const auto src = conn->getSource();
-		const auto tgt = conn->getTarget();
-
-		const float forward_angle = src->getAngleFromNode(tgt, true);
-
-		auto get_angle_delta = [](float a, float b)
-		{
-			float diff = std::abs(a - b);
-			while (diff > 180.0f) diff = std::abs(diff - 360.0f);
-			return diff;
-		};
-
 		bool wrong_way = false;
 
-		if (conn->isOneWay())
 		{
-			wrong_way = (get_angle_delta(facing_angle, forward_angle) > 90.0f);
-		}
-		else
-		{
-			const float cross = (tgt->getX() - src->getX()) * (y - src->getY()) - (tgt->getY() - src->getY()) * (x - src->getX());
-			if (cross <= 0.0f)
+			std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+			const auto success = Container::Connections::FindClosestRoadPoint(x, y, z, out_x, out_y, out_z, out_angle, out_road_width, out_conn_id, PATH_TYPE_VEHICLE);
+
+			if (!success)
+			{
+				return GPS_ERROR_INVALID_CONNECTION;
+			}
+
+			const auto conn = Container::Connections::Find(out_conn_id);
+			if (conn == nullptr || conn->getSource() == nullptr || conn->getTarget() == nullptr)
+			{
+				return GPS_ERROR_INVALID_CONNECTION;
+			}
+
+			const auto src = conn->getSource();
+			const auto tgt = conn->getTarget();
+
+			const float forward_angle = src->getAngleFromNode(tgt, true);
+
+			auto get_angle_delta = [](float a, float b)
+			{
+				float diff = std::abs(a - b);
+				while (diff > 180.0f) diff = std::abs(diff - 360.0f);
+				return diff;
+			};
+
+			if (conn->isOneWay())
 			{
 				wrong_way = (get_angle_delta(facing_angle, forward_angle) > 90.0f);
 			}
 			else
 			{
-				float reverse_angle = forward_angle + 180.0f;
-				if (reverse_angle >= 360.0f) reverse_angle -= 360.0f;
-				wrong_way = (get_angle_delta(facing_angle, reverse_angle) > 90.0f);
+				const float cross = (tgt->getX() - src->getX()) * (y - src->getY()) - (tgt->getY() - src->getY()) * (x - src->getX());
+				if (cross <= 0.0f)
+				{
+					wrong_way = (get_angle_delta(facing_angle, forward_angle) > 90.0f);
+				}
+				else
+				{
+					float reverse_angle = forward_angle + 180.0f;
+					if (reverse_angle >= 360.0f) reverse_angle -= 360.0f;
+					wrong_way = (get_angle_delta(facing_angle, reverse_angle) > 90.0f);
+				}
 			}
 		}
 
-		Container::UnlockShared();
-
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[5], &address);
-		*address = wrong_way ? 1 : 0;
+		if (!WriteRef(amx, params[5], wrong_way ? 1 : 0))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -1488,7 +1482,7 @@ namespace Natives
 		}
 
 		const auto index = static_cast<int>(params[2]);
-		const auto nodes = path->getNodes();
+		const auto& nodes = path->getNodes();
 		const auto count = static_cast<int>(nodes.size());
 
 		TurnDirection turn = TURN_NONE;
@@ -1540,12 +1534,11 @@ namespace Natives
 			}
 		}
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[3], &address);
-		*address = static_cast<cell>(turn);
-
-		amx_GetAddr(amx, params[4], &address);
-		*address = amx_ftoc(turn_angle);
+		if (!WriteRef(amx, params[3], turn) ||
+		    !WriteRef(amx, params[4], turn_angle))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -1572,9 +1565,10 @@ namespace Natives
 		const auto speed_ms = speed_kmh / 3.6f;
 		const auto seconds = path->getLength() / speed_ms;
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[3], &address);
-		*address = amx_ftoc(seconds);
+		if (!WriteRef(amx, params[3], seconds))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -1582,11 +1576,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL GetPathProgress(AMX* amx, cell* params)
 	{
-		if (params[0] < (7 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 7 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(7);
 
 		const auto path_id = static_cast<int>(params[1]);
 		const auto path = Container::Paths::Find(path_id);
@@ -1668,15 +1658,12 @@ namespace Natives
 		const float distance_to_path = std::sqrt(min_dist_sq);
 		const bool off_route = (distance_to_path > threshold);
 
-		cell* addr = nullptr;
-		amx_GetAddr(amx, params[5], &addr);
-		*addr = best_step;
-
-		amx_GetAddr(amx, params[6], &addr);
-		*addr = amx_ftoc(distance_to_path);
-
-		amx_GetAddr(amx, params[7], &addr);
-		*addr = off_route ? 1 : 0;
+		if (!WriteRef(amx, params[5], best_step) ||
+		    !WriteRef(amx, params[6], distance_to_path) ||
+		    !WriteRef(amx, params[7], off_route ? 1 : 0))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -1684,11 +1671,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL GetPathRemainingInfo(AMX* amx, cell* params)
 	{
-		if (params[0] < (4 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 4 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(4);
 
 		const auto path_id = static_cast<int>(params[1]);
 		const auto path = Container::Paths::Find(path_id);
@@ -1723,12 +1706,11 @@ namespace Natives
 		const float speed_mps = (speed_kmh * 1000.0f) / 3600.0f;
 		const float remaining_sec = remaining_dist / speed_mps;
 
-		cell* addr = nullptr;
-		amx_GetAddr(amx, params[3], &addr);
-		*addr = amx_ftoc(remaining_dist);
-
-		amx_GetAddr(amx, params[4], &addr);
-		*addr = amx_ftoc(remaining_sec);
+		if (!WriteRef(amx, params[3], remaining_dist) ||
+		    !WriteRef(amx, params[4], remaining_sec))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -1754,12 +1736,11 @@ namespace Natives
 
 		if (count < 3)
 		{
-			const float zero = 0.0f;
-			cell* addr = nullptr;
-			amx_GetAddr(amx, params[5], &addr);
-			*addr = TURN_NONE;
-			amx_GetAddr(amx, params[6], &addr);
-			*addr = amx_ftoc(zero);
+			if (!WriteRef(amx, params[5], TURN_NONE) ||
+			    !WriteRef(amx, params[6], 0.0f))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			return GPS_ERROR_NONE;
 		}
 
@@ -1865,75 +1846,88 @@ namespace Natives
 			}
 		}
 
-		cell* addr = nullptr;
-		amx_GetAddr(amx, params[5], &addr);
-		*addr = next_turn;
-
-		amx_GetAddr(amx, params[6], &addr);
-		*addr = amx_ftoc(dist_to_turn);
+		if (!WriteRef(amx, params[5], next_turn) ||
+		    !WriteRef(amx, params[6], dist_to_turn))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
 
 
-	static void DouglasPeuckerRecursive(const std::deque<Node*>& nodes, int first, int last, float epsilon, std::vector<bool>& keep)
+	static void DouglasPeuckerIterative(const std::vector<Node*>& nodes, int total_count, float epsilon, std::vector<bool>& keep)
 	{
-		if (last <= first + 1)
+		if (total_count <= 2)
 		{
 			return;
 		}
 
-		float max_dist = 0.0f;
-		int index = first;
+		std::vector<std::pair<int, int>> stack;
+		stack.reserve(64);
+		stack.emplace_back(0, total_count - 1);
 
-		const float ax = nodes[first]->getX();
-		const float ay = nodes[first]->getY();
-		const float bx = nodes[last]->getX();
-		const float by = nodes[last]->getY();
-
-		const float dx = bx - ax;
-		const float dy = by - ay;
-		const float line_len_sq = dx * dx + dy * dy;
-
-		for (int i = first + 1; i < last; ++i)
+		while (!stack.empty())
 		{
-			float dist = 0.0f;
-			const float px = nodes[i]->getX();
-			const float py = nodes[i]->getY();
+			const auto range = stack.back();
+			stack.pop_back();
 
-			if (line_len_sq < 0.0001f)
+			const int first = range.first;
+			const int last = range.second;
+
+			if (last <= first + 1)
 			{
-				dist = nodes[i]->getDistanceFromNode(nodes[first]);
+				continue;
 			}
-			else
+
+			float max_dist = 0.0f;
+			int index = first;
+
+			const float ax = nodes[first]->getX();
+			const float ay = nodes[first]->getY();
+			const float bx = nodes[last]->getX();
+			const float by = nodes[last]->getY();
+
+			const float dx = bx - ax;
+			const float dy = by - ay;
+			const float line_len_sq = dx * dx + dy * dy;
+
+			for (int i = first + 1; i < last; ++i)
 			{
-				const float cross = std::abs((px - ax) * dy - (py - ay) * dx);
+				float dist = 0.0f;
+				const float px = nodes[i]->getX();
+				const float py = nodes[i]->getY();
+
+				if (line_len_sq < 0.0001f)
+				{
+					dist = nodes[i]->getDistanceFromNode(nodes[first]);
+				}
+				else
+				{
+					const float cross = std::abs((px - ax) * dy - (py - ay) * dx);
 				dist = cross / std::sqrt(line_len_sq);
+				}
+
+				if (dist > max_dist)
+				{
+					max_dist = dist;
+					index = i;
+				}
 			}
 
-			if (dist > max_dist)
+			if (max_dist > epsilon)
 			{
-				max_dist = dist;
-				index = i;
+				keep[index] = true;
+				stack.emplace_back(index, last);
+				stack.emplace_back(first, index);
 			}
-		}
-
-		if (max_dist > epsilon)
-		{
-			keep[index] = true;
-			DouglasPeuckerRecursive(nodes, first, index, epsilon, keep);
-			DouglasPeuckerRecursive(nodes, index, last, epsilon, keep);
 		}
 	}
 
 
 	cell AMX_NATIVE_CALL GetSimplifiedPathNodes(AMX* amx, cell* params)
 	{
-		if (params[0] < (5 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 5 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(5);
 
 		const auto path_id = static_cast<int>(params[1]);
 		const auto path = Container::Paths::Find(path_id);
@@ -1943,11 +1937,14 @@ namespace Natives
 		}
 
 		const float tolerance = amx_ctof(params[2]);
-		cell* out_array = nullptr;
-		amx_GetAddr(amx, params[3], &out_array);
 		const auto max_nodes = static_cast<int>(params[4]);
+		if (max_nodes <= 0)
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
-		if (out_array == nullptr || max_nodes <= 0)
+		cell* out_array = PawnUtils::GetArray(amx, params[3], max_nodes);
+		if (out_array == nullptr)
 		{
 			return GPS_ERROR_INVALID_PARAMS;
 		}
@@ -1957,9 +1954,10 @@ namespace Natives
 
 		if (count == 0)
 		{
-			cell* count_addr = nullptr;
-			amx_GetAddr(amx, params[5], &count_addr);
-			*count_addr = 0;
+			if (!WriteRef(amx, params[5], 0))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			return GPS_ERROR_NONE;
 		}
 
@@ -1977,7 +1975,7 @@ namespace Natives
 			keep[0] = true;
 			keep[count - 1] = true;
 
-			DouglasPeuckerRecursive(nodes, 0, count - 1, tolerance, keep);
+			DouglasPeuckerIterative(nodes, count, tolerance, keep);
 
 			for (int i = 0; i < count; ++i)
 			{
@@ -1997,9 +1995,10 @@ namespace Natives
 			out_array[i] = kept_node_ids[i];
 		}
 
-		cell* count_addr = nullptr;
-		amx_GetAddr(amx, params[5], &count_addr);
-		*count_addr = static_cast<cell>(kept_node_ids.size());
+		if (!WriteRef(amx, params[5], kept_node_ids.size()))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -2009,7 +2008,7 @@ namespace Natives
 	{
 		if (params[0] < (1 * 4))
 		{
-			std::cout << __func__ << ": Expecting at least 1 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
+			GPSLogger::Log("%s: Expecting at least 1 parameter(s), but found %d.", __func__, (int)(params[0] / sizeof(cell)));
 			return false;
 		}
 
@@ -2024,9 +2023,7 @@ namespace Natives
 
 		if (params[0] >= (2 * 4))
 		{
-			cell* addr = nullptr;
-			amx_GetAddr(amx, params[2], &addr);
-			*addr = conn_count;
+			WriteRef(amx, params[2], conn_count);
 		}
 
 		return (conn_count >= 3) ? 1 : 0;
@@ -2057,9 +2054,10 @@ namespace Natives
 			return GPS_ERROR_INTERNAL;
 		}
 
-		cell* addr = nullptr;
-		amx_GetAddr(amx, params[3], &addr);
-		*addr = target->getID();
+		if (!WriteRef(amx, params[3], target->getID()))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -2106,11 +2104,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL FindInterceptPath(AMX* amx, cell* params)
 	{
-		if (params[0] < (7 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 7 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(7);
 
 		const auto pursuer_id = static_cast<int>(params[1]);
 		const auto pursuer = Container::Nodes::Find(pursuer_id);
@@ -2126,27 +2120,28 @@ namespace Natives
 		auto type = PATH_TYPE_VEHICLE;
 		if (params[0] >= (8 * 4))
 		{
+			if (!IsValidPathType(params[8], true))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			type = static_cast<PathType>(params[8]);
 		}
 
 		int intercept_node_id = -1;
 		float time_to_intercept = 0.0f;
-		int path_id = Pathfinder::FindInterceptPath(pursuer, target, target_speed, pursuer_speed, intercept_node_id, time_to_intercept, type);
+		int path_id = Pathfinder::FindInterceptPath(pursuer, target, target_speed, pursuer_speed, intercept_node_id, time_to_intercept, type, amx);
 
 		if (path_id == INVALID_PATH_ID)
 		{
 			return GPS_ERROR_INVALID_PATH;
 		}
 
-		cell* addr = nullptr;
-		amx_GetAddr(amx, params[5], &addr);
-		*addr = path_id;
-
-		amx_GetAddr(amx, params[6], &addr);
-		*addr = intercept_node_id;
-
-		amx_GetAddr(amx, params[7], &addr);
-		*addr = amx_ftoc(time_to_intercept);
+		if (!WriteRef(amx, params[5], path_id) ||
+		    !WriteRef(amx, params[6], intercept_node_id) ||
+		    !WriteRef(amx, params[7], time_to_intercept))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -2170,12 +2165,11 @@ namespace Natives
 		const int count = static_cast<int>(nodes.size());
 		if (count < 2)
 		{
-			cell* addr = nullptr;
-			float zero = 0.0f;
-			amx_GetAddr(amx, params[6], &addr);
-			*addr = amx_ftoc(zero);
-			amx_GetAddr(amx, params[7], &addr);
-			*addr = amx_ftoc(zero);
+			if (!WriteRef(amx, params[6], 0.0f) ||
+			    !WriteRef(amx, params[7], 0.0f))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			return GPS_ERROR_NONE;
 		}
 
@@ -2238,7 +2232,7 @@ namespace Natives
 			remain -= seg_len;
 		}
 
-		float target_bearing = std::atan2(gx - vx, vy - gy) * 180.0f / 3.14159265358979323846f;
+		float target_bearing = std::atan2(vx - gx, gy - vy) * 180.0f / 3.14159265358979323846f;
 		if (target_bearing < 0.0f) target_bearing += 360.0f;
 		if (target_bearing >= 360.0f) target_bearing -= 360.0f;
 
@@ -2254,12 +2248,11 @@ namespace Natives
 		else if (abs_diff > 25.0f) recommended_speed = 45.0f;
 		else if (abs_diff > 10.0f) recommended_speed = 65.0f;
 
-		cell* addr = nullptr;
-		amx_GetAddr(amx, params[6], &addr);
-		*addr = amx_ftoc(steer_ratio);
-
-		amx_GetAddr(amx, params[7], &addr);
-		*addr = amx_ftoc(recommended_speed);
+		if (!WriteRef(amx, params[6], steer_ratio) ||
+		    !WriteRef(amx, params[7], recommended_speed))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -2267,11 +2260,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL GetReachableMapNodes(AMX* amx, cell* params)
 	{
-		if (params[0] < (6 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 6 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(6);
 
 		const auto source_id = static_cast<int>(params[1]);
 		const auto source = Container::Nodes::Find(source_id);
@@ -2281,13 +2270,25 @@ namespace Natives
 		const bool by_time = params[3] != 0;
 		const float speed = amx_ctof(params[4]);
 
-		cell* out_nodes = nullptr;
-		amx_GetAddr(amx, params[5], &out_nodes);
 		const auto max_nodes = static_cast<int>(params[6]);
+		if (max_nodes <= 0)
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		cell* out_nodes = PawnUtils::GetArray(amx, params[5], max_nodes);
+		if (out_nodes == nullptr)
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		auto type = PATH_TYPE_VEHICLE;
 		if (params[0] >= (8 * 4))
 		{
+			if (!IsValidPathType(params[8], true))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			type = static_cast<PathType>(params[8]);
 		}
 
@@ -2304,9 +2305,10 @@ namespace Natives
 			out_nodes[i] = reached[i];
 		}
 
-		cell* count_addr = nullptr;
-		amx_GetAddr(amx, params[7], &count_addr);
-		*count_addr = written;
+		if (!WriteRef(amx, params[7], written))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -2314,11 +2316,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL GetReachableBoundingBox(AMX* amx, cell* params)
 	{
-		if (params[0] < (6 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 6 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(6);
 
 		const auto source_id = static_cast<int>(params[1]);
 		const auto source = Container::Nodes::Find(source_id);
@@ -2328,6 +2326,10 @@ namespace Natives
 		auto type = PATH_TYPE_VEHICLE;
 		if (params[0] >= (7 * 4))
 		{
+			if (!IsValidPathType(params[7], true))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			type = static_cast<PathType>(params[7]);
 		}
 
@@ -2354,18 +2356,13 @@ namespace Natives
 			}
 		}
 
-		cell* addr = nullptr;
-		amx_GetAddr(amx, params[3], &addr);
-		*addr = amx_ftoc(minx);
-
-		amx_GetAddr(amx, params[4], &addr);
-		*addr = amx_ftoc(miny);
-
-		amx_GetAddr(amx, params[5], &addr);
-		*addr = amx_ftoc(maxx);
-
-		amx_GetAddr(amx, params[6], &addr);
-		*addr = amx_ftoc(maxy);
+		if (!WriteRef(amx, params[3], minx) ||
+		    !WriteRef(amx, params[4], miny) ||
+		    !WriteRef(amx, params[5], maxx) ||
+		    !WriteRef(amx, params[6], maxy))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -2373,16 +2370,16 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL GetPointZoneName(AMX* amx, cell* params)
 	{
-		if (params[0] < (5 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 5 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(5);
 
 		const float x = amx_ctof(params[1]);
 		const float y = amx_ctof(params[2]);
 		const float z = amx_ctof(params[3]);
 		const int max_len = static_cast<int>(params[5]);
+		if (max_len <= 0 || PawnUtils::GetArray(amx, params[4], max_len) == nullptr)
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		std::string zone = Zones::GetZoneNameAt(x, y, z);
 		amx_SetCppString(amx, params[4], zone, max_len);
@@ -2393,11 +2390,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL GetMapNodeZoneName(AMX* amx, cell* params)
 	{
-		if (params[0] < (2 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 2 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(2);
 
 		const auto node_id = static_cast<int>(params[1]);
 		const auto node = Container::Nodes::Find(node_id);
@@ -2407,6 +2400,10 @@ namespace Natives
 		if (params[0] >= (3 * 4))
 		{
 			max_len = static_cast<int>(params[3]);
+		}
+		if (max_len <= 0 || PawnUtils::GetArray(amx, params[2], max_len) == nullptr)
+		{
+			return GPS_ERROR_INVALID_PARAMS;
 		}
 
 		std::string zone = Zones::GetZoneNameAt(node->getX(), node->getY(), node->getZ());
@@ -2418,14 +2415,10 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL GetPathZonesSummary(AMX* amx, cell* params)
 	{
-		if (params[0] < (4 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 4 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(4);
 
 		const auto path_id = static_cast<int>(params[1]);
-		const auto path = Container::Paths::Find(path_id);
+		const auto path = FindPathLocked(path_id);
 		if (path == nullptr) return GPS_ERROR_INVALID_PATH;
 
 		const int max_zones = static_cast<int>(params[3]);
@@ -2434,22 +2427,33 @@ namespace Natives
 		{
 			max_zone_len = static_cast<int>(params[5]);
 		}
+		if (max_zones <= 0 || max_zone_len <= 0)
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
-		std::vector<Node*> node_vec(path->getNodes().begin(), path->getNodes().end());
-		std::vector<std::string> zone_names = Zones::GetPathZones(node_vec);
+		std::vector<std::string> zone_names = Zones::GetPathZones(path->getNodes());
 
 		const int count = std::min(static_cast<int>(zone_names.size()), max_zones);
-		cell* base_addr = nullptr;
-		amx_GetAddr(amx, params[2], &base_addr);
+		cell* base_addr = PawnUtils::GetArray(amx, params[2], max_zones);
+		if (base_addr == nullptr)
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		for (int i = 0; i < count; ++i)
 		{
-			amx_SetCppString(amx, params[2] + (i * max_zone_len * sizeof(cell)), zone_names[i], max_zone_len);
+			cell* dest = PawnUtils::GetPawnSubArray(amx, base_addr, i, max_zone_len);
+			if (dest != nullptr)
+			{
+				amx_SetString(dest, zone_names[i].c_str(), 0, 0, max_zone_len);
+			}
 		}
 
-		cell* count_addr = nullptr;
-		amx_GetAddr(amx, params[4], &count_addr);
-		*count_addr = count;
+		if (!WriteRef(amx, params[4], count))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -2457,14 +2461,10 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL SetPathAutoDestroy(AMX* amx, cell* params)
 	{
-		if (params[0] < (1 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 1 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(1);
 
 		const auto path_id = static_cast<int>(params[1]);
-		const auto path = Container::Paths::Find(path_id);
+		const auto path = FindPathLocked(path_id);
 		if (path == nullptr) return GPS_ERROR_INVALID_PATH;
 
 		uint32_t ttl_ms = 60000;
@@ -2474,6 +2474,10 @@ namespace Natives
 		}
 
 		path->setTTL(ttl_ms);
+		if (ttl_ms > 0)
+		{
+			Container::Paths::RegisterExpiry(path->getID(), path->getExpiryTime());
+		}
 		return GPS_ERROR_NONE;
 	}
 
@@ -2487,8 +2491,14 @@ namespace Natives
 		if (path == nullptr) return GPS_ERROR_INVALID_PATH;
 
 		const auto filename = amx_GetCppString(amx, params[2]);
+		if (!File::IsSafeFilePath(filename))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
 		std::ofstream out("scriptfiles/" + filename);
 		if (!out.good()) return GPS_ERROR_INTERNAL;
+		out.imbue(std::locale::classic());
 
 		const auto& nodes = path->getNodes();
 		out << nodes.size() << "\n";
@@ -2508,13 +2518,19 @@ namespace Natives
 		CHECK_PARAMS(2);
 
 		const auto filename = amx_GetCppString(amx, params[1]);
+		if (!File::IsSafeFilePath(filename))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
 		std::ifstream in("scriptfiles/" + filename);
 		if (!in.good()) return GPS_ERROR_INTERNAL;
+		in.imbue(std::locale::classic());
 
 		size_t count = 0;
 		if (!(in >> count) || count == 0) return GPS_ERROR_INVALID_PATH;
 
-		auto path = new Path(0.0f);
+		std::vector<Node*> nodes;
 		float total_len = 0.0f;
 		Node* prev = nullptr;
 
@@ -2530,31 +2546,24 @@ namespace Natives
 				{
 					total_len += prev->getDistanceFromNode(node);
 				}
-				path->addNodeToEnd(node);
+				nodes.push_back(node);
 				prev = node;
 			}
 		}
 
 		in.close();
 
-		if (path->getNodes().empty())
+		if (nodes.empty())
 		{
-			delete path;
 			return GPS_ERROR_INVALID_PATH;
 		}
 
-		path->setLength(total_len);
-		int idx = 0;
-		for (auto n : path->getNodes())
+		auto path = Container::Paths::Register(nodes, total_len, amx);
+
+		if (!WriteRef(amx, params[2], path->getID()))
 		{
-			n->addToPath(path, idx++);
+			return GPS_ERROR_INVALID_PARAMS;
 		}
-
-		const int id = Container::Paths::Add(path);
-
-		cell* addr = nullptr;
-		amx_GetAddr(amx, params[2], &addr);
-		*addr = id;
 
 		return GPS_ERROR_NONE;
 	}
@@ -2569,6 +2578,10 @@ namespace Natives
 		if (path == nullptr) return GPS_ERROR_INVALID_PATH;
 
 		const int max_len = static_cast<int>(params[3]);
+		if (max_len <= 0 || PawnUtils::GetArray(amx, params[2], max_len) == nullptr)
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 		std::string str;
 		const auto& nodes = path->getNodes();
 		for (size_t i = 0; i < nodes.size(); ++i)
@@ -2591,14 +2604,20 @@ namespace Natives
 
 		std::stringstream ss(str);
 		std::string item;
-		auto path = new Path(0.0f);
+		std::vector<Node*> nodes;
 		float total_len = 0.0f;
 		Node* prev = nullptr;
 
 		while (std::getline(ss, item, ','))
 		{
 			if (item.empty()) continue;
-			int id = std::stoi(item);
+			int id = 0;
+			auto [ptr, ec] = std::from_chars(item.data(), item.data() + item.size(), id);
+			if (ec != std::errc() || ptr != item.data() + item.size())
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
+
 			Node* node = Container::Nodes::Find(id);
 			if (node != nullptr)
 			{
@@ -2606,29 +2625,22 @@ namespace Natives
 				{
 					total_len += prev->getDistanceFromNode(node);
 				}
-				path->addNodeToEnd(node);
+				nodes.push_back(node);
 				prev = node;
 			}
 		}
 
-		if (path->getNodes().empty())
+		if (nodes.empty())
 		{
-			delete path;
 			return GPS_ERROR_INVALID_PATH;
 		}
 
-		path->setLength(total_len);
-		int idx = 0;
-		for (auto n : path->getNodes())
+		auto path = Container::Paths::Register(nodes, total_len, amx);
+
+		if (!WriteRef(amx, params[2], path->getID()))
 		{
-			n->addToPath(path, idx++);
+			return GPS_ERROR_INVALID_PARAMS;
 		}
-
-		const int id = Container::Paths::Add(path);
-
-		cell* addr = nullptr;
-		amx_GetAddr(amx, params[2], &addr);
-		*addr = id;
 
 		return GPS_ERROR_NONE;
 	}
@@ -2636,11 +2648,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL FindPathForVehicleCat(AMX* amx, cell* params)
 	{
-		if (params[0] < (3 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(3);
 
 		const auto start_id = static_cast<int>(params[1]);
 		const auto start = Container::Nodes::Find(start_id);
@@ -2653,21 +2661,30 @@ namespace Natives
 		auto cat = VEHICLE_CAT_STANDARD;
 		if (params[0] >= (4 * 4))
 		{
+			if (!IsValidVehicleCat(params[4]))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			cat = static_cast<VehicleCategory>(params[4]);
 		}
 
 		auto pref = ROUTE_PREF_SHORTEST;
 		if (params[0] >= (5 * 4))
 		{
+			if (!IsValidRoutePref(params[5]))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			pref = static_cast<RoutePreference>(params[5]);
 		}
 
-		const auto result = Pathfinder::FindPath(start, target, PATH_TYPE_VEHICLE, pref, cat);
+		const auto result = Pathfinder::FindPath(start, target, PATH_TYPE_VEHICLE, pref, cat, amx);
 		if (result == -1) return GPS_ERROR_INVALID_PATH;
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[3], &address);
-		*address = result;
+		if (!WriteRef(amx, params[3], result))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -2714,11 +2731,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL FindSafePath(AMX* amx, cell* params)
 	{
-		if (params[0] < (3 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(3);
 
 		const auto start_id = static_cast<int>(params[1]);
 		const auto start = Container::Nodes::Find(start_id);
@@ -2737,21 +2750,30 @@ namespace Natives
 		auto type = PATH_TYPE_VEHICLE;
 		if (params[0] >= (5 * 4))
 		{
+			if (!IsValidPathType(params[5], true))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			type = static_cast<PathType>(params[5]);
 		}
 
 		auto pref = ROUTE_PREF_SHORTEST;
 		if (params[0] >= (6 * 4))
 		{
+			if (!IsValidRoutePref(params[6]))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			pref = static_cast<RoutePreference>(params[6]);
 		}
 
-		const auto result = Pathfinder::FindSafePath(start, target, danger_penalty, type, pref);
+		const auto result = Pathfinder::FindSafePath(start, target, danger_penalty, type, pref, amx);
 		if (result == -1) return GPS_ERROR_INVALID_PATH;
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[3], &address);
-		*address = result;
+		if (!WriteRef(amx, params[3], result))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -2759,11 +2781,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL FindEcoPath(AMX* amx, cell* params)
 	{
-		if (params[0] < (3 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(3);
 
 		const auto start_id = static_cast<int>(params[1]);
 		const auto start = Container::Nodes::Find(start_id);
@@ -2782,15 +2800,20 @@ namespace Natives
 		auto type = PATH_TYPE_VEHICLE;
 		if (params[0] >= (5 * 4))
 		{
+			if (!IsValidPathType(params[5], true))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			type = static_cast<PathType>(params[5]);
 		}
 
-		const auto result = Pathfinder::FindEcoPath(start, target, max_slope, type);
+		const auto result = Pathfinder::FindEcoPath(start, target, max_slope, type, amx);
 		if (result == -1) return GPS_ERROR_INVALID_PATH;
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[3], &address);
-		*address = result;
+		if (!WriteRef(amx, params[3], result))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -2809,18 +2832,13 @@ namespace Natives
 			return GPS_ERROR_INVALID_PATH;
 		}
 
-		cell* addr = nullptr;
-		amx_GetAddr(amx, params[2], &addr);
-		*addr = amx_ftoc(min_z);
-
-		amx_GetAddr(amx, params[3], &addr);
-		*addr = amx_ftoc(max_z);
-
-		amx_GetAddr(amx, params[4], &addr);
-		*addr = amx_ftoc(climb);
-
-		amx_GetAddr(amx, params[5], &addr);
-		*addr = amx_ftoc(max_incline);
+		if (!WriteRef(amx, params[2], min_z) ||
+		    !WriteRef(amx, params[3], max_z) ||
+		    !WriteRef(amx, params[4], climb) ||
+		    !WriteRef(amx, params[5], max_incline))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -2838,9 +2856,10 @@ namespace Natives
 
 		int id = Tunnels::RegisterTunnelArea(minx, miny, minz, maxx, maxy, maxz);
 
-		cell* addr = nullptr;
-		amx_GetAddr(amx, params[7], &addr);
-		*addr = id;
+		if (!WriteRef(amx, params[7], id))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -2890,12 +2909,11 @@ namespace Natives
 		float entry = 0.0f, exit = 0.0f;
 		bool has_tunnel = Tunnels::GetPathTunnelSegments(path, entry, exit);
 
-		cell* addr = nullptr;
-		amx_GetAddr(amx, params[2], &addr);
-		*addr = amx_ftoc(entry);
-
-		amx_GetAddr(amx, params[3], &addr);
-		*addr = amx_ftoc(exit);
+		if (!WriteRef(amx, params[2], entry) ||
+		    !WriteRef(amx, params[3], exit))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return has_tunnel ? 1 : 0;
 	}
@@ -2903,21 +2921,20 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL FindNearestPointByRoad(AMX* amx, cell* params)
 	{
-		if (params[0] < (7 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 7 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(7);
 
 		const float from_x = amx_ctof(params[1]);
 		const float from_y = amx_ctof(params[2]);
 		const float from_z = amx_ctof(params[3]);
 
-		cell* points_addr = nullptr;
-		amx_GetAddr(amx, params[4], &points_addr);
 		const int total_points = static_cast<int>(params[5]);
+		if (total_points <= 0)
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
-		if (points_addr == nullptr || total_points <= 0)
+		cell* points_addr = PawnUtils::GetArray(amx, params[4], total_points);
+		if (points_addr == nullptr)
 		{
 			return GPS_ERROR_INVALID_PARAMS;
 		}
@@ -2927,50 +2944,57 @@ namespace Natives
 
 		for (int i = 0; i < total_points; ++i)
 		{
-			cell* sub_addr = nullptr;
-			amx_GetAddr(amx, points_addr[i], &sub_addr);
-			if (sub_addr != nullptr)
+			cell* sub_addr = PawnUtils::GetPawnSubArray(amx, points_addr, i, 3);
+			if (sub_addr == nullptr)
 			{
-				destinations.push_back({ amx_ctof(sub_addr[0]), amx_ctof(sub_addr[1]), amx_ctof(sub_addr[2]) });
+				return GPS_ERROR_INVALID_PARAMS;
 			}
-			else
-			{
-				destinations.push_back({ 0.0f, 0.0f, 0.0f });
-			}
+			destinations.push_back({ amx_ctof(sub_addr[0]), amx_ctof(sub_addr[1]), amx_ctof(sub_addr[2]) });
 		}
 
 		auto type = PATH_TYPE_VEHICLE;
 		if (params[0] >= (9 * 4))
 		{
+			if (!IsValidPathType(params[9], true))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			type = static_cast<PathType>(params[9]);
+		}
+
+		bool create_path = false;
+		if (params[0] >= (8 * static_cast<int>(sizeof(cell))))
+		{
+			cell* path_addr = PawnUtils::GetAddress(amx, params[8]);
+			if (path_addr != nullptr)
+			{
+				if (params[0] >= (9 * static_cast<int>(sizeof(cell))) && *path_addr == INVALID_PATH_ID)
+				{
+					create_path = false;
+				}
+				else
+				{
+					create_path = true;
+				}
+			}
 		}
 
 		int nearest_idx = -1;
 		float road_dist = 0.0f;
 		int path_id = INVALID_PATH_ID;
 
-		int status = Pathfinder::FindNearestPointByRoad(from_x, from_y, from_z, destinations, nearest_idx, road_dist, path_id, type);
+		int status = Pathfinder::FindNearestPointByRoad(from_x, from_y, from_z, destinations, nearest_idx, road_dist, path_id, type, amx, create_path);
 		if (status != 0)
 		{
 			return GPS_ERROR_INVALID_PATH;
 		}
 
-		cell* out_idx_addr = nullptr;
-		amx_GetAddr(amx, params[6], &out_idx_addr);
-		*out_idx_addr = nearest_idx;
+		WriteRef(amx, params[6], nearest_idx);
+		WriteRef(amx, params[7], road_dist);
 
-		cell* out_dist_addr = nullptr;
-		amx_GetAddr(amx, params[7], &out_dist_addr);
-		*out_dist_addr = amx_ftoc(road_dist);
-
-		if (params[0] >= (8 * 4))
+		if (params[0] >= (8 * static_cast<int>(sizeof(cell))))
 		{
-			cell* out_path_addr = nullptr;
-			amx_GetAddr(amx, params[8], &out_path_addr);
-			if (out_path_addr != nullptr)
-			{
-				*out_path_addr = path_id;
-			}
+			WriteRef(amx, params[8], path_id);
 		}
 
 		return GPS_ERROR_NONE;
@@ -2979,11 +3003,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL RegisterRoadRadar(AMX* amx, cell* params)
 	{
-		if (params[0] < (5 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 5 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(5);
 
 		const int id = static_cast<int>(params[1]);
 		const float x = amx_ctof(params[2]);
@@ -3030,15 +3050,12 @@ namespace Natives
 
 		bool found = Radars::GetNextPathRadar(path, current_dist, radar_id, dist_to_radar, speed_limit);
 
-		cell* addr = nullptr;
-		amx_GetAddr(amx, params[3], &addr);
-		*addr = radar_id;
-
-		amx_GetAddr(amx, params[4], &addr);
-		*addr = amx_ftoc(dist_to_radar);
-
-		amx_GetAddr(amx, params[5], &addr);
-		*addr = amx_ftoc(speed_limit);
+		if (!WriteRef(amx, params[3], radar_id) ||
+		    !WriteRef(amx, params[4], dist_to_radar) ||
+		    !WriteRef(amx, params[5], speed_limit))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return found ? 1 : 0;
 	}
@@ -3060,18 +3077,13 @@ namespace Natives
 			return GPS_ERROR_INVALID_PATH;
 		}
 
-		cell* addr = nullptr;
-		amx_GetAddr(amx, params[4], &addr);
-		*addr = amx_ftoc(ox);
-
-		amx_GetAddr(amx, params[5], &addr);
-		*addr = amx_ftoc(oy);
-
-		amx_GetAddr(amx, params[6], &addr);
-		*addr = amx_ftoc(oz);
-
-		amx_GetAddr(amx, params[7], &addr);
-		*addr = amx_ftoc(oang);
+		if (!WriteRef(amx, params[4], ox) ||
+		    !WriteRef(amx, params[5], oy) ||
+		    !WriteRef(amx, params[6], oz) ||
+		    !WriteRef(amx, params[7], oang))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -3088,11 +3100,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL FindEvasivePath(AMX* amx, cell* params)
 	{
-		if (params[0] < (3 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(3);
 
 		const auto start_id = static_cast<int>(params[1]);
 		const auto start = Container::Nodes::Find(start_id);
@@ -3105,15 +3113,20 @@ namespace Natives
 		auto type = PATH_TYPE_VEHICLE;
 		if (params[0] >= (4 * 4))
 		{
+			if (!IsValidPathType(params[4], true))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			type = static_cast<PathType>(params[4]);
 		}
 
-		const auto result = Pathfinder::FindEvasivePath(start, target, type);
+		const auto result = Pathfinder::FindEvasivePath(start, target, type, amx);
 		if (result == -1) return GPS_ERROR_INVALID_PATH;
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[3], &address);
-		*address = result;
+		if (!WriteRef(amx, params[3], result))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -3121,11 +3134,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL SetConnectionToll(AMX* amx, cell* params)
 	{
-		if (params[0] < (2 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 2 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(2);
 
 		const auto id = static_cast<int>(params[1]);
 		const bool has_toll = params[2] != 0;
@@ -3142,11 +3151,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL GetConnectionToll(AMX* amx, cell* params)
 	{
-		if (params[0] < (1 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 1 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(1);
 
 		const auto id = static_cast<int>(params[1]);
 		int cost = 0;
@@ -3154,12 +3159,7 @@ namespace Natives
 
 		if (params[0] >= (2 * 4))
 		{
-			cell* addr = nullptr;
-			amx_GetAddr(amx, params[2], &addr);
-			if (addr != nullptr)
-			{
-				*addr = cost;
-			}
+			WriteRef(amx, params[2], cost);
 		}
 
 		return has_toll ? 1 : 0;
@@ -3168,11 +3168,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL FindPathAvoidTolls(AMX* amx, cell* params)
 	{
-		if (params[0] < (3 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(3);
 
 		const auto start_id = static_cast<int>(params[1]);
 		const auto start = Container::Nodes::Find(start_id);
@@ -3185,21 +3181,30 @@ namespace Natives
 		auto type = PATH_TYPE_VEHICLE;
 		if (params[0] >= (4 * 4))
 		{
+			if (!IsValidPathType(params[4], true))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			type = static_cast<PathType>(params[4]);
 		}
 
 		auto pref = ROUTE_PREF_SHORTEST;
 		if (params[0] >= (5 * 4))
 		{
+			if (!IsValidRoutePref(params[5]))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			pref = static_cast<RoutePreference>(params[5]);
 		}
 
-		const auto result = Pathfinder::FindPathAvoidTolls(start, target, type, pref);
+		const auto result = Pathfinder::FindPathAvoidTolls(start, target, type, pref, amx);
 		if (result == -1) return GPS_ERROR_INVALID_PATH;
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[3], &address);
-		*address = result;
+		if (!WriteRef(amx, params[3], result))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -3222,15 +3227,12 @@ namespace Natives
 			return GPS_ERROR_INVALID_PATH;
 		}
 
-		cell* addr = nullptr;
-		amx_GetAddr(amx, params[3], &addr);
-		*addr = is_roundabout ? 1 : 0;
-
-		amx_GetAddr(amx, params[4], &addr);
-		*addr = exit_number;
-
-		amx_GetAddr(amx, params[5], &addr);
-		*addr = amx_ftoc(radius);
+		if (!WriteRef(amx, params[3], is_roundabout ? 1 : 0) ||
+		    !WriteRef(amx, params[4], exit_number) ||
+		    !WriteRef(amx, params[5], radius))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -3244,15 +3246,16 @@ namespace Natives
 		if (path == nullptr) return GPS_ERROR_INVALID_PATH;
 
 		const float spacing = amx_ctof(params[2]);
-		cell* out_x = nullptr;
-		amx_GetAddr(amx, params[3], &out_x);
-		cell* out_y = nullptr;
-		amx_GetAddr(amx, params[4], &out_y);
-		cell* out_z = nullptr;
-		amx_GetAddr(amx, params[5], &out_z);
 		const int max_points = static_cast<int>(params[6]);
+		if (max_points <= 0)
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
-		if (out_x == nullptr || out_y == nullptr || out_z == nullptr || max_points <= 0)
+		cell* out_x = PawnUtils::GetArray(amx, params[3], max_points);
+		cell* out_y = PawnUtils::GetArray(amx, params[4], max_points);
+		cell* out_z = PawnUtils::GetArray(amx, params[5], max_points);
+		if (out_x == nullptr || out_y == nullptr || out_z == nullptr)
 		{
 			return GPS_ERROR_INVALID_PARAMS;
 		}
@@ -3266,14 +3269,15 @@ namespace Natives
 		const int written = std::min(static_cast<int>(pts.size()), max_points);
 		for (int i = 0; i < written; ++i)
 		{
-			out_x[i] = amx_ftoc(std::get<0>(pts[i]));
-			out_y[i] = amx_ftoc(std::get<1>(pts[i]));
-			out_z[i] = amx_ftoc(std::get<2>(pts[i]));
+			out_x[i] = PawnUtils::FloatToCell(std::get<0>(pts[i]));
+			out_y[i] = PawnUtils::FloatToCell(std::get<1>(pts[i]));
+			out_z[i] = PawnUtils::FloatToCell(std::get<2>(pts[i]));
 		}
 
-		cell* total_addr = nullptr;
-		amx_GetAddr(amx, params[7], &total_addr);
-		*total_addr = written;
+		if (!WriteRef(amx, params[7], written))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -3299,11 +3303,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL FindPathPavedOnly(AMX* amx, cell* params)
 	{
-		if (params[0] < (3 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 3 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(3);
 
 		const auto start_id = static_cast<int>(params[1]);
 		const auto start = Container::Nodes::Find(start_id);
@@ -3316,15 +3316,20 @@ namespace Natives
 		auto type = PATH_TYPE_VEHICLE;
 		if (params[0] >= (4 * 4))
 		{
+			if (!IsValidPathType(params[4], true))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			type = static_cast<PathType>(params[4]);
 		}
 
-		const auto result = Pathfinder::FindPathPavedOnly(start, target, type);
+		const auto result = Pathfinder::FindPathPavedOnly(start, target, type, amx);
 		if (result == -1) return GPS_ERROR_INVALID_PATH;
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[3], &address);
-		*address = result;
+		if (!WriteRef(amx, params[3], result))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -3332,11 +3337,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL GetConnectionRoadClass(AMX* amx, cell* params)
 	{
-		if (params[0] < (1 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 1 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(1);
 
 		const int id = static_cast<int>(params[1]);
 		RoadClass rc = Container::Connections::GetRoadClass(id);
@@ -3344,12 +3345,7 @@ namespace Natives
 		if (params[0] >= (2 * 4))
 		{
 			float speed = Container::Connections::GetSpeedLimit(id);
-			cell* addr = nullptr;
-			amx_GetAddr(amx, params[2], &addr);
-			if (addr != nullptr)
-			{
-				*addr = amx_ftoc(speed);
-			}
+			WriteRef(amx, params[2], speed);
 		}
 
 		return static_cast<cell>(rc);
@@ -3392,15 +3388,12 @@ namespace Natives
 			return GPS_ERROR_INVALID_PATH;
 		}
 
-		cell* addr = nullptr;
-		amx_GetAddr(amx, params[3], &addr);
-		*addr = diverge;
-
-		amx_GetAddr(amx, params[4], &addr);
-		*addr = rejoin_old;
-
-		amx_GetAddr(amx, params[5], &addr);
-		*addr = rejoin_new;
+		if (!WriteRef(amx, params[3], diverge) ||
+		    !WriteRef(amx, params[4], rejoin_old) ||
+		    !WriteRef(amx, params[5], rejoin_new))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
@@ -3440,11 +3433,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL FindPathWithHeightLimit(AMX* amx, cell* params)
 	{
-		if (params[0] < (4 * 4))
-		{
-			std::cout << __func__ << ": Expecting at least 4 parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n";
-			return GPS_ERROR_INVALID_PARAMS;
-		}
+		CHECK_PARAMS_MIN(4);
 
 		const auto start_id = static_cast<int>(params[1]);
 		const auto start = Container::Nodes::Find(start_id);
@@ -3459,167 +3448,199 @@ namespace Natives
 		auto type = PATH_TYPE_VEHICLE;
 		if (params[0] >= (5 * 4))
 		{
+			if (!IsValidPathType(params[5], true))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			type = static_cast<PathType>(params[5]);
 		}
 
 		auto pref = ROUTE_PREF_SHORTEST;
 		if (params[0] >= (6 * 4))
 		{
+			if (!IsValidRoutePref(params[6]))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
 			pref = static_cast<RoutePreference>(params[6]);
 		}
 
-		const auto result = Pathfinder::FindPathWithHeightLimit(start, target, vehicle_height, type, pref);
+		const auto result = Pathfinder::FindPathWithHeightLimit(start, target, vehicle_height, type, pref, amx);
 		if (result == -1) return GPS_ERROR_INVALID_PATH;
 
-		cell* address = nullptr;
-		amx_GetAddr(amx, params[4], &address);
-		*address = result;
+		if (!WriteRef(amx, params[4], result))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		return GPS_ERROR_NONE;
 
 		return GPS_ERROR_NONE;
 	}
 }
 
+template <cell(AMX_NATIVE_CALL *Func)(AMX*, cell*)>
+cell AMX_NATIVE_CALL SafeNative(AMX* amx, cell* params)
+{
+	try
+	{
+		return Func(amx, params);
+	}
+	catch (const std::exception& e)
+	{
+		GPSLogger::Log("[GPS-Plugin-Plus Exception]: %s", e.what());
+		return GPS_ERROR_INTERNAL;
+	}
+	catch (...)
+	{
+		GPSLogger::Log("[GPS-Plugin-Plus Exception]: Unknown exception");
+		return GPS_ERROR_INTERNAL;
+	}
+}
+
+#define DEFINE_NATIVE(name) { #name, SafeNative<Natives::name> }
+
 AMX_NATIVE_INFO PluginNatives[] =
 {
-	{"CreateMapNode",					Natives::CreateMapNode},
-	{"DestroyMapNode",					Natives::DestroyMapNode},
-	{"IsValidMapNode", 					Natives::IsValidMapNode},
-	{"GetMapNodePos",					Natives::GetMapNodePos},
+	DEFINE_NATIVE(CreateMapNode),
+	DEFINE_NATIVE(DestroyMapNode),
+	DEFINE_NATIVE(IsValidMapNode),
+	DEFINE_NATIVE(GetMapNodePos),
 
-	{"GetMapNodeType",					Natives::GetMapNodeType},
-	{"GetMapNodeFlags",					Natives::GetMapNodeFlags},
+	DEFINE_NATIVE(GetMapNodeType),
+	DEFINE_NATIVE(GetMapNodeFlags),
 
-	{"CreateConnection",				Natives::CreateConnection},
-	{"DestroyConnection",				Natives::DestroyConnection},
-	{"GetConnectionSource", 			Natives::GetConnectionSource},
-	{"GetConnectionTarget",				Natives::GetConnectionTarget},
+	DEFINE_NATIVE(CreateConnection),
+	DEFINE_NATIVE(DestroyConnection),
+	DEFINE_NATIVE(GetConnectionSource),
+	DEFINE_NATIVE(GetConnectionTarget),
 
-	{"GetMapNodeConnectionCount",		Natives::GetMapNodeConnectionCount},
-	{"GetMapNodeConnection",			Natives::GetMapNodeConnection},
-	{"GetConnectionBetweenMapNodes",	Natives::GetConnectionBetweenMapNodes},
+	DEFINE_NATIVE(GetMapNodeConnectionCount),
+	DEFINE_NATIVE(GetMapNodeConnection),
+	DEFINE_NATIVE(GetConnectionBetweenMapNodes),
 
-	{"GetConnectionLaneInfo",			Natives::GetConnectionLaneInfo},
-	{"GetConnectionLanePos",			Natives::GetConnectionLanePos},
-	{"IsConnectionOneWay",				Natives::IsConnectionOneWay},
+	DEFINE_NATIVE(GetConnectionLaneInfo),
+	DEFINE_NATIVE(GetConnectionLanePos),
+	DEFINE_NATIVE(IsConnectionOneWay),
 
-	{"GetDistanceBetweenMapNodes",		Natives::GetDistanceBetweenMapNodes},
-	{"GetAngleBetweenMapNodes",			Natives::GetAngleBetweenMapNodes},
-	{"GetMapNodeDistanceFromPoint",		Natives::GetMapNodeDistanceFromPoint},
-	{"GetMapNodeAngleFromPoint",		Natives::GetMapNodeAngleFromPoint},
-	{"GetClosestMapNodeToPoint",		Natives::GetClosestMapNodeToPoint},
+	DEFINE_NATIVE(GetDistanceBetweenMapNodes),
+	DEFINE_NATIVE(GetAngleBetweenMapNodes),
+	DEFINE_NATIVE(GetMapNodeDistanceFromPoint),
+	DEFINE_NATIVE(GetMapNodeAngleFromPoint),
+	DEFINE_NATIVE(GetClosestMapNodeToPoint),
 
-	{"GetHighestMapNodeID",				Natives::GetHighestMapNodeID},
-	{"GetRandomMapNode",				Natives::GetRandomMapNode},
-	{"GetRandomMapNodeFromArea",		Natives::GetRandomMapNodeFromArea},
-	{"GetRandomMapNodeInArea",			Natives::GetRandomMapNodeFromArea},
+	DEFINE_NATIVE(GetHighestMapNodeID),
+	DEFINE_NATIVE(GetRandomMapNode),
+	DEFINE_NATIVE(GetRandomMapNodeFromArea),
+	{"GetRandomMapNodeInArea",			SafeNative<Natives::GetRandomMapNodeFromArea>},
 
-	{"FindPath",						Natives::FindPath},
-	{"FindPathThreaded",				Natives::FindPathThreaded},
-	{"FindPathThreadedEx",				Natives::FindPathThreadedEx},
-	{"FindMultiStopPath",				Natives::FindMultiStopPath},
+	DEFINE_NATIVE(FindPath),
+	DEFINE_NATIVE(FindPathThreaded),
+	DEFINE_NATIVE(FindPathThreadedEx),
+	DEFINE_NATIVE(FindMultiStopPath),
 
-	{"SaveMapNodesToFile",				Natives::SaveMapNodesToFile},
+	DEFINE_NATIVE(SaveMapNodesToFile),
 
-	{"IsValidPath", 					Natives::IsValidPath},
-	{"GetPathSize",						Natives::GetPathSize},
-	{"GetPathLength",					Natives::GetPathLength},
-	{"GetPathNode",						Natives::GetPathNode},
-	{"GetPathNodeIndex",				Natives::GetPathNodeIndex},
-	{"GetPathLaneNodePos",				Natives::GetPathLaneNodePos},
-	{"DestroyPath",						Natives::DestroyPath},
+	DEFINE_NATIVE(IsValidPath),
+	DEFINE_NATIVE(GetPathSize),
+	DEFINE_NATIVE(GetPathLength),
+	DEFINE_NATIVE(GetPathNode),
+	DEFINE_NATIVE(GetPathNodeIndex),
+	DEFINE_NATIVE(GetPathLaneNodePos),
+	DEFINE_NATIVE(DestroyPath),
 
-	{"SetMapNodeBlocked",				Natives::SetMapNodeBlocked},
-	{"IsMapNodeBlocked",				Natives::IsMapNodeBlocked},
-	{"SetConnectionBlocked",			Natives::SetConnectionBlocked},
-	{"IsConnectionBlocked",				Natives::IsConnectionBlocked},
+	DEFINE_NATIVE(SetMapNodeBlocked),
+	DEFINE_NATIVE(IsMapNodeBlocked),
+	DEFINE_NATIVE(SetConnectionBlocked),
+	DEFINE_NATIVE(IsConnectionBlocked),
 
-	{"GetClosestPointOnRoad",			Natives::GetClosestPointOnRoad},
-	{"GetRoadPositionInfo",				Natives::GetRoadPositionInfo},
-	{"IsPointAgainstTraffic",			Natives::IsPointAgainstTraffic},
+	DEFINE_NATIVE(GetClosestPointOnRoad),
+	DEFINE_NATIVE(GetRoadPositionInfo),
+	DEFINE_NATIVE(IsPointAgainstTraffic),
 
-	{"GetPathTurnDirection",			Natives::GetPathTurnDirection},
-	{"GetPathEstimatedTravelTime",		Natives::GetPathEstimatedTravelTime},
+	DEFINE_NATIVE(GetPathTurnDirection),
+	DEFINE_NATIVE(GetPathEstimatedTravelTime),
 
-	{"GetPathProgress",					Natives::GetPathProgress},
-	{"GetPathRemainingInfo",			Natives::GetPathRemainingInfo},
-	{"GetPathNextManeuver",				Natives::GetPathNextManeuver},
-	{"GetSimplifiedPathNodes",			Natives::GetSimplifiedPathNodes},
-	{"IsMapNodeIntersection",			Natives::IsMapNodeIntersection},
-	{"GetMapNodeConnectionTarget",		Natives::GetMapNodeConnectionTarget},
+	DEFINE_NATIVE(GetPathProgress),
+	DEFINE_NATIVE(GetPathRemainingInfo),
+	DEFINE_NATIVE(GetPathNextManeuver),
+	DEFINE_NATIVE(GetSimplifiedPathNodes),
+	DEFINE_NATIVE(IsMapNodeIntersection),
+	DEFINE_NATIVE(GetMapNodeConnectionTarget),
 
-	{"SetConnectionTrafficMultiplier",	Natives::SetConnectionTrafficMultiplier},
-	{"GetConnectionTrafficMultiplier",	Natives::GetConnectionTrafficMultiplier},
-	{"SetAreaTrafficMultiplier",		Natives::SetAreaTrafficMultiplier},
-	{"ResetTrafficMultipliers",			Natives::ResetTrafficMultipliers},
+	DEFINE_NATIVE(SetConnectionTrafficMultiplier),
+	DEFINE_NATIVE(GetConnectionTrafficMultiplier),
+	DEFINE_NATIVE(SetAreaTrafficMultiplier),
+	DEFINE_NATIVE(ResetTrafficMultipliers),
 
-	{"FindInterceptPath",				Natives::FindInterceptPath},
-	{"GetPurePursuitSteering",			Natives::GetPurePursuitSteering},
+	DEFINE_NATIVE(FindInterceptPath),
+	DEFINE_NATIVE(GetPurePursuitSteering),
 
-	{"GetReachableMapNodes",			Natives::GetReachableMapNodes},
-	{"GetReachableBoundingBox",			Natives::GetReachableBoundingBox},
+	DEFINE_NATIVE(GetReachableMapNodes),
+	DEFINE_NATIVE(GetReachableBoundingBox),
 
-	{"GetPointZoneName",				Natives::GetPointZoneName},
-	{"GetMapNodeZoneName",				Natives::GetMapNodeZoneName},
-	{"GetPathZonesSummary",				Natives::GetPathZonesSummary},
+	DEFINE_NATIVE(GetPointZoneName),
+	DEFINE_NATIVE(GetMapNodeZoneName),
+	DEFINE_NATIVE(GetPathZonesSummary),
 
-	{"SetPathAutoDestroy",				Natives::SetPathAutoDestroy},
+	DEFINE_NATIVE(SetPathAutoDestroy),
 
-	{"SavePathToFile",					Natives::SavePathToFile},
-	{"LoadPathFromFile",				Natives::LoadPathFromFile},
-	{"ExportPathToString",				Natives::ExportPathToString},
-	{"ImportPathFromString",			Natives::ImportPathFromString},
+	DEFINE_NATIVE(SavePathToFile),
+	DEFINE_NATIVE(LoadPathFromFile),
+	DEFINE_NATIVE(ExportPathToString),
+	DEFINE_NATIVE(ImportPathFromString),
 
-	{"FindPathForVehicleCat",			Natives::FindPathForVehicleCat},
+	DEFINE_NATIVE(FindPathForVehicleCat),
 
-	{"SetMapNodeDanger",				Natives::SetMapNodeDanger},
-	{"GetMapNodeDanger",				Natives::GetMapNodeDanger},
-	{"SetAreaDangerWeight",				Natives::SetAreaDangerWeight},
-	{"ResetDangerWeights",				Natives::ResetDangerWeights},
-	{"FindSafePath",					Natives::FindSafePath},
+	DEFINE_NATIVE(SetMapNodeDanger),
+	DEFINE_NATIVE(GetMapNodeDanger),
+	DEFINE_NATIVE(SetAreaDangerWeight),
+	DEFINE_NATIVE(ResetDangerWeights),
+	DEFINE_NATIVE(FindSafePath),
 
-	{"FindEcoPath",						Natives::FindEcoPath},
-	{"GetPathElevationStats",			Natives::GetPathElevationStats},
+	DEFINE_NATIVE(FindEcoPath),
+	DEFINE_NATIVE(GetPathElevationStats),
 
-	{"RegisterTunnelArea",				Natives::RegisterTunnelArea},
-	{"UnregisterTunnelArea",			Natives::UnregisterTunnelArea},
-	{"ClearCustomTunnelAreas",			Natives::ClearCustomTunnelAreas},
-	{"IsPointInTunnel",					Natives::IsPointInTunnel},
-	{"IsMapNodeUnderground",			Natives::IsMapNodeUnderground},
-	{"GetPathTunnelSegments",			Natives::GetPathTunnelSegments},
+	DEFINE_NATIVE(RegisterTunnelArea),
+	DEFINE_NATIVE(UnregisterTunnelArea),
+	DEFINE_NATIVE(ClearCustomTunnelAreas),
+	DEFINE_NATIVE(IsPointInTunnel),
+	DEFINE_NATIVE(IsMapNodeUnderground),
+	DEFINE_NATIVE(GetPathTunnelSegments),
 
-	{"FindNearestPointByRoad",			Natives::FindNearestPointByRoad},
+	DEFINE_NATIVE(FindNearestPointByRoad),
 
-	{"RegisterRoadRadar",				Natives::RegisterRoadRadar},
-	{"UnregisterRoadRadar",				Natives::UnregisterRoadRadar},
-	{"ClearRoadRadars",					Natives::ClearRoadRadars},
-	{"GetNextPathRadar",				Natives::GetNextPathRadar},
+	DEFINE_NATIVE(RegisterRoadRadar),
+	DEFINE_NATIVE(UnregisterRoadRadar),
+	DEFINE_NATIVE(ClearRoadRadars),
+	DEFINE_NATIVE(GetNextPathRadar),
 
-	{"GetPathOffsetPosition",			Natives::GetPathOffsetPosition},
+	DEFINE_NATIVE(GetPathOffsetPosition),
 
-	{"IsMapNodeDeadEnd",				Natives::IsMapNodeDeadEnd},
-	{"FindEvasivePath",					Natives::FindEvasivePath},
+	DEFINE_NATIVE(IsMapNodeDeadEnd),
+	DEFINE_NATIVE(FindEvasivePath),
 
-	{"SetConnectionToll",				Natives::SetConnectionToll},
-	{"GetConnectionToll",				Natives::GetConnectionToll},
-	{"FindPathAvoidTolls",				Natives::FindPathAvoidTolls},
+	DEFINE_NATIVE(SetConnectionToll),
+	DEFINE_NATIVE(GetConnectionToll),
+	DEFINE_NATIVE(FindPathAvoidTolls),
 
-	{"GetPathRoundaboutInfo",			Natives::GetPathRoundaboutInfo},
-	{"GetSmoothPathPoints",				Natives::GetSmoothPathPoints},
+	DEFINE_NATIVE(GetPathRoundaboutInfo),
+	DEFINE_NATIVE(GetSmoothPathPoints),
 
-	{"IsConnectionPaved",				Natives::IsConnectionPaved},
-	{"SetConnectionPaved",				Natives::SetConnectionPaved},
-	{"FindPathPavedOnly",				Natives::FindPathPavedOnly},
+	DEFINE_NATIVE(IsConnectionPaved),
+	DEFINE_NATIVE(SetConnectionPaved),
+	DEFINE_NATIVE(FindPathPavedOnly),
 
-	{"GetConnectionRoadClass",			Natives::GetConnectionRoadClass},
-	{"SetConnectionSpeedLimit",			Natives::SetConnectionSpeedLimit},
-	{"GetConnectionSpeedLimit",			Natives::GetConnectionSpeedLimit},
+	DEFINE_NATIVE(GetConnectionRoadClass),
+	DEFINE_NATIVE(SetConnectionSpeedLimit),
+	DEFINE_NATIVE(GetConnectionSpeedLimit),
 
-	{"GetPathRejoinPoint",				Natives::GetPathRejoinPoint},
+	DEFINE_NATIVE(GetPathRejoinPoint),
 
-	{"SetConnectionMaxHeight",			Natives::SetConnectionMaxHeight},
-	{"GetConnectionMaxHeight",			Natives::GetConnectionMaxHeight},
-	{"SetAreaMaxHeight",				Natives::SetAreaMaxHeight},
-	{"FindPathWithHeightLimit",			Natives::FindPathWithHeightLimit},
+	DEFINE_NATIVE(SetConnectionMaxHeight),
+	DEFINE_NATIVE(GetConnectionMaxHeight),
+	DEFINE_NATIVE(SetAreaMaxHeight),
+	DEFINE_NATIVE(FindPathWithHeightLimit),
 
 	{0, 0}
 };

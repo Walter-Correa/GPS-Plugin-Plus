@@ -5,6 +5,7 @@
 
 namespace File
 {
+	bool IsSafeFilePath(const std::string& path);
 	bool LoadNodes(const std::string& filename, int& line_count, int& node_count, int& connection_count);
 	bool SaveNodes(const std::string& filename);
 };

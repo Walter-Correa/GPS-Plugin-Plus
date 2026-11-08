@@ -17,8 +17,9 @@ const int INVALID_PATH_ID = -1;
 const int INVALID_CONNECTION_ID = -1;
 
 
-enum PathType : uint8_t
+enum PathType : int8_t
 {
+	PATH_TYPE_ANY = -1,
 	PATH_TYPE_VEHICLE = 0,
 	PATH_TYPE_PEDESTRIAN = 1,
 	PATH_TYPE_BOAT = 2

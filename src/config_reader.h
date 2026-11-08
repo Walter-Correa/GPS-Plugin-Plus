@@ -23,7 +23,7 @@ public:
 		file_.seekg(0, std::ios::beg);
 
 		std::string buffer, line_key;
-		T value;
+		T value = defaultValue;
 
 		while (std::getline(file_, buffer))
 		{
@@ -33,8 +33,11 @@ public:
 
 			if (key == line_key)
 			{
-				input >> value;
-				return value;
+				if (input >> value)
+				{
+					return value;
+				}
+				return defaultValue;
 			}
 		}
 

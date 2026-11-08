@@ -1,21 +1,24 @@
 #pragma once
 
 #include <vector>
-#include "common.h"
+#include <atomic>
 #include <mutex>
-
+#include "common.h"
 
 class Node
 {
 public:
 	Node(int id, float x, float y, float z, PathType type = PATH_TYPE_VEHICLE, uint32_t flags = NODE_FLAG_NONE);
+	Node(const Node&) = delete;
+	Node& operator=(const Node&) = delete;
 
 	void setForDeletion();
 	bool isSetForDeletion() const;
 
 	void addConnection(Connection* connection);
 	void removeConnection(Connection* connection);
-	std::vector<Connection*> getConnections() const;
+	const std::vector<Connection*>& getConnections() const;
+	int getOutDegree() const;
 
 	void addToPath(Path* path, int index);
 	void removeFromPath(Path* path);
@@ -49,8 +52,9 @@ public:
 private:
 	int id_;
 	bool is_set_for_deletion_;
-	bool blocked_;
-	float danger_weight_;
+	std::atomic<bool> blocked_;
+	std::atomic<float> danger_weight_;
+	std::atomic<int> out_degree_{0};
 
 	float x_;
 	float y_;
@@ -62,5 +66,5 @@ private:
 	std::vector<Connection*> connections_;
 
 	std::vector<std::pair<Path*, int>> paths_;
-	std::mutex paths_lock_;
+	mutable std::mutex paths_lock_;
 };

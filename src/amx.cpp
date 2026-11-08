@@ -2,31 +2,47 @@
 #include "callback.h"
 
 
-Amx::Amx(AMX* amx)
+Amx::Amx(AMX* amx, uint64_t serial)
+	: internal_amx_(amx), load_serial_(serial)
 {
-	internal_amx_ = amx;
+}
+
+
+Amx::~Amx()
+{
+	std::lock_guard<std::mutex> lock(callback_queue_lock_);
+	callback_queue_.clear();
+}
+
+
+uint64_t Amx::getLoadSerial() const
+{
+	return load_serial_;
 }
 
 
 void Amx::queueCallback(Callback* callback)
 {
-	callback_queue_lock_.lock();
-	callback_queue_.push_back(callback);
-	callback_queue_lock_.unlock();
+	if (callback == nullptr) return;
+	std::lock_guard<std::mutex> lock(callback_queue_lock_);
+	callback_queue_.emplace_back(callback);
 }
 
 
 void Amx::processCallbacks()
 {
-	if (callback_queue_lock_.try_lock())
+	std::vector<std::unique_ptr<Callback>> local_queue;
 	{
-		for (auto callback : callback_queue_)
+		std::lock_guard<std::mutex> lock(callback_queue_lock_);
+		local_queue.swap(callback_queue_);
+	}
+
+	for (auto& callback : local_queue)
+	{
+		if (callback)
 		{
 			callback->call();
 		}
-
-		callback_queue_.clear();
-		callback_queue_lock_.unlock();
 	}
 }
 

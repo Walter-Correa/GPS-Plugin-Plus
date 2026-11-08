@@ -2,40 +2,97 @@
 
 #include "callback.h"
 #include "amx.h"
+#include "amx_handler.h"
+#include "logger.h"
 
 
-Callback::Callback(Amx* amx, const std::string& function, const char* format, cell* params, const unsigned int param_offset)
+Callback::Callback(AMX* amx, uint64_t amx_serial, const std::string& function, const char* format, cell* params, const unsigned int param_offset)
 {
-	amx_ = amx;
+	amx_raw_ = amx;
+	amx_serial_ = amx_serial;
 	function_ = function;
 	result_ = 0;
+	valid_ = true;
+
+	if (amx == nullptr || params == nullptr)
+	{
+		valid_ = false;
+		return;
+	}
 
 	if (format != nullptr && *format != '\0')
 	{
-		const auto internal_amx = amx->getInternalAmx();
-		cell* address = nullptr;
+		const size_t total_params = static_cast<size_t>(params[0] / sizeof(cell));
 		auto param_index = param_offset + 1;
 
-		do
+		while (*format != '\0')
 		{
+			if (param_index > total_params)
+			{
+				GPSLogger::Log("Callback \"%s\": format specifier count exceeds parameters passed (%d)", function_.c_str(), (int)total_params);
+				valid_ = false;
+				break;
+			}
+
 			switch (*format)
 			{
 			case 's':
 			{
-				char* string = nullptr;
-				amx_StrParam(internal_amx, params[param_index++], string);
-				arguments_.push_front(string == nullptr ? std::string() : std::string(string));
+				cell* str_addr = nullptr;
+				if (amx_GetAddr(amx_raw_, params[param_index++], &str_addr) == AMX_ERR_NONE && str_addr != nullptr)
+				{
+					int str_len = 0;
+					if (amx_StrLen(str_addr, &str_len) == AMX_ERR_NONE && str_len >= 0)
+					{
+						std::string str(str_len, '\0');
+						if (str_len > 0)
+						{
+							amx_GetString(&str[0], str_addr, 0, str_len + 1);
+						}
+						arguments_.push_front(str);
+					}
+					else
+					{
+						valid_ = false;
+					}
+				}
+				else
+				{
+					valid_ = false;
+				}
+				break;
+			}
+
+			case 'i':
+			case 'd':
+			{
+				cell* int_addr = nullptr;
+				if (amx_GetAddr(amx_raw_, params[param_index++], &int_addr) == AMX_ERR_NONE && int_addr != nullptr)
+				{
+					arguments_.push_front(*int_addr);
+				}
+				else
+				{
+					valid_ = false;
+				}
 				break;
 			}
 
 			default:
 			{
-				amx_GetAddr(internal_amx, params[param_index++], &address);
-				arguments_.push_front(*address);
+				GPSLogger::Log("Invalid format specifier '%c' in callback", *format);
+				valid_ = false;
 				break;
 			}
 			}
-		} while (*(++format));
+
+			if (!valid_)
+			{
+				break;
+			}
+
+			format++;
+		}
 	}
 }
 
@@ -46,15 +103,43 @@ void Callback::setResult(const int value)
 }
 
 
-Amx* Callback::getAmx() const
+AMX* Callback::getAmxRaw() const
 {
-	return amx_;
+	return amx_raw_;
+}
+
+
+uint64_t Callback::getAmxSerial() const
+{
+	return amx_serial_;
+}
+
+
+bool Callback::isValid() const
+{
+	return valid_;
 }
 
 
 bool Callback::call()
 {
-	const auto internal_amx = amx_->getInternalAmx();
+	if (!valid_ || amx_raw_ == nullptr)
+	{
+		return false;
+	}
+
+	Amx* amx = AmxHandler::GetAmx(amx_raw_);
+	if (amx == nullptr || amx->getLoadSerial() != amx_serial_)
+	{
+		return false;
+	}
+
+	const auto internal_amx = amx->getInternalAmx();
+	if (internal_amx == nullptr)
+	{
+		return false;
+	}
+
 	auto amx_idx = 0;
 	cell amx_ret;
 
@@ -62,7 +147,7 @@ bool Callback::call()
 
 	if (error != AMX_ERR_NONE)
 	{
-		std::cout << "Failed to locate public function \"" << function_ << "\" in AMX, error: " << error << "\n";
+		GPSLogger::Log("Failed to locate public function \"%s\" in AMX, error: %d", function_.c_str(), error);
 		return false;
 	}
 

@@ -1,43 +1,43 @@
 {
-	"user": "Walter-Correa",
-	"repo": "GPS-Plugin-Plus",
-	"version": "2.0.0",
-	"entry": "Example.pwn",
-	"output": "Example.amx",
-	"dependencies": [
-		"sampctl/samp-stdlib"
-	],
-	"dev_dependencies": [
-		"IllidanS4/PawnPlus"
-	],
-	"resources": [
-		{
-			"name": "GPS-windows.zip",
-			"platform": "windows",
-			"archive": true,
-			"includes": [
-				"GPS.inc"
-			],
-			"plugins": [
-				"GPS.dll"
-			],
-			"files": {
-				"GPS.dat": "scriptfiles/GPS.dat"
-			}
-		},
-		{
-			"name": "GPS-linux.zip",
-			"platform": "linux",
-			"archive": true,
-			"includes": [
-				"GPS.inc"
-			],
-			"plugins": [
-				"GPS.so"
-			],
-			"files": {
-				"GPS.dat": "scriptfiles/GPS.dat"
-			}
-		}
-	]
+    "user": "Walter-Correa",
+    "repo": "GPS-Plugin-Plus",
+    "version": "2.0.0",
+    "entry": "Example.pwn",
+    "output": "Example.amx",
+    "dependencies": [
+        "sampctl/samp-stdlib"
+    ],
+    "dev_dependencies": [
+        "IllidanS4/PawnPlus"
+    ],
+    "resources": [
+        {
+            "name": "GPS-Plugin-Plus-Windows.zip",
+            "platform": "windows",
+            "archive": true,
+            "includes": [
+                "include/GPS.inc"
+            ],
+            "plugins": [
+                "plugins/GPS.dll"
+            ],
+            "files": {
+                "scriptfiles/GPS.dat": "scriptfiles/GPS.dat"
+            }
+        },
+        {
+            "name": "GPS-Plugin-Plus-Linux.zip",
+            "platform": "linux",
+            "archive": true,
+            "includes": [
+                "include/GPS.inc"
+            ],
+            "plugins": [
+                "plugins/GPS.so"
+            ],
+            "files": {
+                "scriptfiles/GPS.dat": "scriptfiles/GPS.dat"
+            }
+        }
+    ]
 }

@@ -1,12 +1,14 @@
 #pragma once
 
+#include <atomic>
 #include "common.h"
-
 
 class Connection
 {
 public:
 	Connection(int id, Node* source, Node* target, float distance, float road_width = 8.0f, int left_lanes = 1, int right_lanes = 1, bool one_way = false);
+	Connection(const Connection&) = delete;
+	Connection& operator=(const Connection&) = delete;
 
 	int getId() const;
 	Node* getSource() const;
@@ -50,11 +52,11 @@ private:
 	int left_lanes_;
 	int right_lanes_;
 	bool one_way_;
-	bool blocked_;
-	float traffic_multiplier_;
-	bool has_toll_;
-	int toll_cost_;
-	bool is_paved_;
-	float speed_limit_;
-	float max_height_;
+	std::atomic<bool> blocked_;
+	std::atomic<float> traffic_multiplier_;
+	std::atomic<bool> has_toll_;
+	std::atomic<int> toll_cost_;
+	std::atomic<bool> is_paved_;
+	std::atomic<float> speed_limit_;
+	std::atomic<float> max_height_;
 };

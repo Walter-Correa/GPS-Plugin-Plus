@@ -55,6 +55,21 @@ jobs:
           if (Test-Path "Example.pwn") { Copy-Item "Example.pwn" "package/Example.pwn" -Force }
           if (Test-Path "LICENSE") { Copy-Item "LICENSE" "package/LICENSE" -Force }
 
+      - name: Verify Windows Static Runtime
+        shell: pwsh
+        run: |
+          foreach ($file in @("package/plugins/GPS.dll", "package/components/GPS.dll")) {
+            if (-not (Test-Path $file)) {
+              throw "Expected binary $file does not exist!"
+            }
+            $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $file))
+            $ascii = [System.Text.Encoding]::ASCII.GetString($bytes)
+            if ($ascii -match "MSVCP\d+\.dll" -or $ascii -match "VCRUNTIME\d+\.dll") {
+              throw "Verification failed: $file depends on dynamic MSVC runtime (MSVCP/VCRUNTIME)!"
+            }
+          }
+          Write-Host "Windows static runtime verification passed: 0 MSVCP/VCRUNTIME dependencies."
+
       - name: Compress Package
         shell: pwsh
         run: |
@@ -68,7 +83,7 @@ jobs:
           path: dist/GPS-Plugin-Plus-Windows.zip
 
   build-linux-release:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -76,16 +91,19 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Install 32-bit Multilib
+      - name: Build inside debian:buster container
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-multilib g++-multilib zip
-
-      - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_FLAGS="-m32" -DCMAKE_CXX_FLAGS="-m32" -DCMAKE_SHARED_LINKER_FLAGS="-m32" -DCMAKE_MODULE_LINKER_FLAGS="-m32"
-
-      - name: Build
-        run: cmake --build build --config Release
+          docker run --rm -v "${PWD}:/workspace" -w /workspace debian:buster bash -c "
+            set -e
+            sed -i 's/deb.debian.org/archive.debian.org/g' /etc/apt/sources.list
+            sed -i 's|security.debian.org/debian-security|archive.debian.org/debian-security|g' /etc/apt/sources.list
+            sed -i '/buster-updates/d' /etc/apt/sources.list
+            apt-get -o Acquire::Check-Valid-Until=false update
+            apt-get install -y --no-install-recommends ca-certificates curl g++-multilib gcc-multilib make zip binutils
+            curl -sSL https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3-linux-x86_64.tar.gz | tar --strip-components=1 -xz -C /usr/local
+            cmake -B build -DCMAKE_BUILD_TYPE=Release
+            cmake --build build --config Release
+          "
 
       - name: Prepare Package
         run: |
@@ -108,6 +126,44 @@ jobs:
           [ -f "GPS.dat" ] && cp "GPS.dat" "package/scriptfiles/GPS.dat"
           [ -f "Example.pwn" ] && cp "Example.pwn" "package/Example.pwn"
           [ -f "LICENSE" ] && cp "LICENSE" "package/LICENSE"
+
+      - name: Verify Linux Compatibility and Exports
+        run: |
+          set -e
+          for so in package/plugins/GPS.so package/components/GPS.so; do
+            if [ ! -f "$so" ]; then
+              echo "Error: $so not found!"
+              exit 1
+            fi
+            # Must not require GLIBCXX (statically linked libstdc++)
+            if objdump -T "$so" | grep "GLIBCXX_"; then
+              echo "Verification failed: $so depends on GLIBCXX_!"
+              exit 1
+            fi
+            # Must not require GLIBC >= 2.29
+            if objdump -T "$so" | grep -E "GLIBC_2\.(29|3[0-9])"; then
+              echo "Verification failed: $so requires GLIBC >= 2.29!"
+              exit 1
+            fi
+          done
+
+          # Verify symbol visibility for plugin: only expected exported symbols
+          UNEXPECTED_PLUGIN=$(nm -D --defined-only package/plugins/GPS.so | awk '{print $3}' | grep -v -E "^(Supports|Load|Unload|AmxLoad|AmxUnload|ProcessTick)$" || true)
+          if [ -n "$UNEXPECTED_PLUGIN" ]; then
+            echo "Verification failed: GPS.so exports unexpected symbols:"
+            echo "$UNEXPECTED_PLUGIN"
+            exit 1
+          fi
+
+          # Verify symbol visibility for component: only ComponentEntryPoint
+          UNEXPECTED_COMP=$(nm -D --defined-only package/components/GPS.so | awk '{print $3}' | grep -v -E "^ComponentEntryPoint$" || true)
+          if [ -n "$UNEXPECTED_COMP" ]; then
+            echo "Verification failed: components/GPS.so exports unexpected symbols:"
+            echo "$UNEXPECTED_COMP"
+            exit 1
+          fi
+
+          echo "Linux verification passed: glibc <= 2.28, static libstdc++, strictly hidden symbols."
 
       - name: Compress Package
         run: |

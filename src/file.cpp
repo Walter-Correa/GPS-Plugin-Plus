@@ -1,6 +1,8 @@
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include <iomanip>
+#include <locale>
 
 #include "file.h"
 #include "container.h"
@@ -10,35 +12,80 @@
 
 namespace File
 {
+	bool IsSafeFilePath(const std::string& path)
+	{
+		if (path.empty() || path.length() > 255)
+		{
+			return false;
+		}
+		if (path.find(':') != std::string::npos)
+		{
+			return false;
+		}
+		if (path.front() == '/' || path.front() == '\\')
+		{
+			return false;
+		}
+		if (path.find("..") != std::string::npos)
+		{
+			return false;
+		}
+		if (path.find('\\') != std::string::npos)
+		{
+			return false;
+		}
+		for (char c : path)
+		{
+			if (static_cast<unsigned char>(c) < 32 || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|')
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
 	bool LoadNodes(const std::string& filename, int& line_count, int& node_count, int& connection_count)
 	{
+		if (!IsSafeFilePath(filename))
+		{
+			return false;
+		}
+
 		std::ifstream file("scriptfiles/" + filename);
+		if (!file.is_open())
+		{
+			file.clear();
+			file.open(filename);
+		}
 
 		if (!file.good())
 		{
 			return false;
 		}
 
-		Container::LockExclusive();
+		file.imbue(std::locale::classic());
+
+		Container::GraphWriterLock lock(Container::GetGraphMutex());
 
 		std::string buffer;
-		auto type = 0, id = 0, id2 = 0, direction = 0, ignore = 0;
-		auto x = 0.0f, y = 0.0f, z = 0.0f;
 
 		while (std::getline(file, buffer))
 		{
+			if (buffer.empty()) continue;
 			std::istringstream input(buffer);
 
-			input >> type;
+			int type = -1;
+			if (!(input >> type)) continue;
 
-			switch (type)
+			if (type == 0)
 			{
-			case 0:
-			{
-				input >> x >> y >> z >> ignore >> id;
+				float x = 0.0f, y = 0.0f, z = 0.0f;
+				int ignore = 0, id = -1;
+				if (!(input >> x >> y >> z >> ignore >> id)) continue;
+				if (id < 0 || id > 1000000) continue;
 
-				auto node_type = 0;
-				auto node_flags = 0u;
+				int node_type = 0;
+				uint32_t node_flags = 0u;
 
 				if (input >> node_type)
 				{
@@ -49,18 +96,17 @@ namespace File
 				{
 					node_count++;
 				}
-
-				break;
 			}
-
-			case 1:
+			else if (type == 1)
 			{
-				input >> id >> id2 >> direction;
+				int id = -1, id2 = -1, direction = 0;
+				if (!(input >> id >> id2 >> direction)) continue;
+				if (id < 0 || id > 1000000 || id2 < 0 || id2 > 1000000) continue;
 
-				auto road_width = 8.0f;
-				auto left_lanes = 1;
-				auto right_lanes = 1;
-				auto oneway = 0;
+				float road_width = 8.0f;
+				int left_lanes = 1;
+				int right_lanes = 1;
+				int oneway = 0;
 
 				if (input >> road_width)
 				{
@@ -71,29 +117,40 @@ namespace File
 				{
 					connection_count++;
 				}
-
-				break;
-			}
 			}
 
 			line_count++;
 		}
 
-		Container::UnlockExclusive();
-
 		file.close();
+		Container::Nodes::RebuildTypeIndices();
 		return true;
 	}
 
 
 	bool SaveNodes(const std::string& filename)
 	{
+		if (!IsSafeFilePath(filename))
+		{
+			return false;
+		}
+
 		std::ofstream file("scriptfiles/" + filename);
+		if (!file.is_open())
+		{
+			file.clear();
+			file.open(filename);
+		}
 
 		if (!file.good())
 		{
 			return false;
 		}
+
+		file.imbue(std::locale::classic());
+		file << std::setprecision(9);
+
+		std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
 
 		for (const auto node : Container::Nodes::GetAll())
 		{

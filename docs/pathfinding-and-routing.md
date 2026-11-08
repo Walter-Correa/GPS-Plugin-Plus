@@ -1,6 +1,6 @@
 # Pathfinding & Routing Engine
 
-**GPS Plugin Plus** provides an industrial-grade A* pathfinding and routing engine engineered specifically for San Andreas. With support for multi-threaded worker pools, multi-modal transport graphs, and 8 intelligent routing heuristics, it enables servers to compute complex routes across thousands of road segments in milliseconds with zero server tick lag.
+**GPS Plugin Plus** provides an industrial-grade A* pathfinding and routing engine engineered specifically for San Andreas. With support for multi-threaded worker pools, multi-modal transport graphs, and 8 intelligent routing heuristics, it enables servers to compute complex routes across thousands of road segments via background worker threads (with zero server tick lag) or fast on-demand synchronous heuristics running in milliseconds.
 
 ---
 
@@ -119,6 +119,9 @@ FindMultiStopPath(dropoffs, sizeof(dropoffs), delivery_route, true, PATH_TYPE_VE
 ---
 
 ## 5. Dynamic Roadblocks & Detours
+
+> [!NOTE]
+> Graph modifications—including roadblocks (`SetConnectionBlocked`), traffic multipliers (`SetConnectionTrafficMultiplier`), danger zones, and tolls—operate globally across the server process and are shared between gamemodes and filterscripts.
 
 Simulate police roadblocks, construction closures, fallen trees, or gang territory lockdowns in real time.
 

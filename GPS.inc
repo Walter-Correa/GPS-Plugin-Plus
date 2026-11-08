@@ -19,6 +19,9 @@ const Connection:GPS_INVALID_CONNECTION_ID = Connection:-1;
 
 #define INVALID_MAP_NODE_ID             GPS_INVALID_MAP_NODE_ID
 #define INVALID_GPS_PATH_ID             GPS_INVALID_PATH_ID
+#if !defined INVALID_PATH_ID
+    #define INVALID_PATH_ID             GPS_INVALID_PATH_ID
+#endif
 #define INVALID_CONNECTION_ID           GPS_INVALID_CONNECTION_ID
 
 enum _:GPS_ERROR 
@@ -39,6 +42,10 @@ enum PathType
     PATH_TYPE_BOAT                  = 2
 }
 
+// PathNodeFlags represents bitmask attributes of a map node.
+// Note: In original GPS.dat data, flags 2 (EMERGENCY_ONLY) and 4 (ROADBLOCK) are present on
+// thousands of normal road nodes as dataset classification and do NOT automatically block
+// pathfinding. Use SetMapNodeBlocked() if you wish to block routing through specific nodes.
 enum PathNodeFlags (<<= 1)
 {
     NODE_FLAG_NONE                  = 0,
@@ -202,7 +209,7 @@ native bool:IsPointInTunnel(Float:x, Float:y, Float:z);
 native bool:IsMapNodeUnderground(MapNode:nodeid);
 native bool:GetPathTunnelSegments(Path:pathid, &Float:entry_distance, &Float:exit_distance);
 
-native FindNearestPointByRoad(Float:from_x, Float:from_y, Float:from_z, const Float:points[][3], total_points, &nearest_index, &Float:road_distance, &Path:pathid = Path:0, PathType:type = PATH_TYPE_VEHICLE);
+native FindNearestPointByRoad(Float:from_x, Float:from_y, Float:from_z, const Float:points[][3], total_points, &nearest_index, &Float:road_distance, &Path:pathid = GPS_INVALID_PATH_ID, PathType:type = PATH_TYPE_VEHICLE);
 
 native RegisterRoadRadar(radarid, Float:x, Float:y, Float:z, Float:speed_limit_kmh, Float:alert_radius = 300.0);
 native bool:UnregisterRoadRadar(radarid);

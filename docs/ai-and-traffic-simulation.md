@@ -109,6 +109,9 @@ FindEvasivePath(suspect_node, safehouse_node, fugitive_path);
 
 Register static or mobile speed enforcement cameras. The plugin queries upcoming path nodes and alerts drivers before they enter the enforcement zone:
 
+> [!NOTE]
+> Speed radars are registered globally in the server process and shared across gamemodes and filterscripts. Ensure custom `radarid` values do not collide. `GetNextPathRadar` evaluates proximity within `alert_radius` (default: 300m) of any upcoming segment of the path, which can include nearby parallel streets within that radius.
+
 ```pawn
 native RegisterRoadRadar(radarid, Float:x, Float:y, Float:z, Float:speed_limit_kmh, Float:alert_radius = 300.0);
 native bool:UnregisterRoadRadar(radarid);
@@ -155,10 +158,13 @@ native FindNearestPointByRoad(
     total_points, 
     &nearest_index, 
     &Float:road_distance, 
-    &Path:pathid = Path:0, 
+    &Path:pathid = GPS_INVALID_PATH_ID, 
     PathType:type = PATH_TYPE_VEHICLE
 );
 ```
+
+> [!TIP]
+> The `pathid` parameter is optional (default: `GPS_INVALID_PATH_ID`). When omitted, no path object is allocated in memory, making nearest-destination distance queries completely leak-free without needing manual `DestroyPath` calls. If you supply a variable to receive `pathid`, be sure to call `DestroyPath(pathid)` when finished with the route.
 
 ```pawn
 new Float:hospitals[3][3] = {
@@ -167,14 +173,15 @@ new Float:hospitals[3][3] = {
     { -2655.0, 635.0, 14.4 }   // San Fierro Medical
 };
 
-new closest_idx, Float:actual_km, Path:route_to_hospital;
+new closest_idx, Float:actual_dist_m;
+// Query closest destination without creating or allocating a path:
 FindNearestPointByRoad(
     px, py, pz, 
     hospitals, sizeof(hospitals), 
-    closest_idx, actual_km, route_to_hospital
+    closest_idx, actual_dist_m
 );
 
-printf("Closest hospital is #%d (Real Road Distance: %.1f meters)", closest_idx, actual_km);
+printf("Closest hospital is #%d (Real Road Distance: %.1f meters)", closest_idx, actual_dist_m);
 ```
 
 ---

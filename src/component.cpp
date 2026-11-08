@@ -1,11 +1,8 @@
 #include <exception>
 #include <stdexcept>
-
-#if defined(_WIN32) || defined(WIN32)
-#define _WINSOCK_DEPRECATED_NO_WARNINGS
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#endif
+#include <cstdlib>
+#include <cstdarg>
+#include <cstdio>
 
 #include <sdk.hpp>
 #include <Server/Components/Pawn/pawn.hpp>
@@ -14,10 +11,8 @@
 #include "natives.h"
 #include "file.h"
 #include "amx_handler.h"
-
-#include <cstdarg>
-#include <cstdio>
-#include <iostream>
+#include "worker_pool.h"
+#include "logger.h"
 
 logprintf_t logprintf = nullptr;
 extern AMX_NATIVE_INFO PluginNatives[];
@@ -35,9 +30,16 @@ static void ComponentLogprintf(const char* format, ...)
 	{
 		g_core->printLn("%s", buffer);
 	}
-	else
+}
+
+static void CheckPluginConflict()
+{
+	if (std::getenv("GPS_LEGACY_PLUGIN_LOADED") != nullptr)
 	{
-		std::cout << buffer << std::endl;
+		if (g_core != nullptr)
+		{
+			g_core->printLn("%s", "[GPS component]: WARNING: Legacy GPS plugin is also loaded! Running both GPS plugin and component concurrently may cause conflicts.");
+		}
 	}
 }
 
@@ -68,16 +70,54 @@ public:
 		g_core = c;
 		logprintf = ComponentLogprintf;
 
-		core_->getEventDispatcher().addEventHandler(this);
+		GPSLogger::InitMainThread();
 
-		auto line_count = 0, node_count = 0, connection_count = 0;
-		if (!File::LoadNodes("GPS.dat", line_count, node_count, connection_count))
+#if defined(_WIN32) || defined(WIN32)
+		_putenv("GPS_COMPONENT_LOADED=1");
+#else
+		setenv("GPS_COMPONENT_LOADED", "1", 1);
+#endif
+
+		CheckPluginConflict();
+
+		IConfig& cfg = core_->getConfig();
+		bool load_nodes = true;
+		int* load_nodes_int = cfg.getInt("gps.load_nodes");
+		if (load_nodes_int != nullptr)
 		{
-			core_->printLn("%s", "[GPS component]: Failed to open \"GPS.dat\"!");
+			load_nodes = (*load_nodes_int != 0);
 		}
 		else
 		{
-			core_->printLn("[GPS component]: Read %i lines, loaded %i nodes and %i connections.", line_count, node_count, connection_count);
+			bool* load_nodes_bool = cfg.getBool("gps.load_nodes");
+			if (load_nodes_bool != nullptr)
+			{
+				load_nodes = *load_nodes_bool;
+			}
+		}
+
+		int worker_threads = 0;
+		int* worker_threads_cfg = cfg.getInt("gps.worker_threads");
+		if (worker_threads_cfg != nullptr)
+		{
+			worker_threads = std::clamp(*worker_threads_cfg, 0, 16);
+		}
+
+		WorkerPool::Init(worker_threads);
+
+		core_->getEventDispatcher().addEventHandler(this);
+
+		if (load_nodes)
+		{
+			auto line_count = 0, node_count = 0, connection_count = 0;
+			if (!File::LoadNodes("GPS.dat", line_count, node_count, connection_count))
+			{
+				core_->printLn("%s", "[GPS component]: Failed to open \"GPS.dat\"!");
+			}
+			else
+			{
+				core_->printLn("[GPS component]: Read %i lines, loaded %i nodes and %i connections.", line_count, node_count, connection_count);
+			}
 		}
 	}
 
@@ -105,6 +145,7 @@ public:
 
 	void free() override
 	{
+		WorkerPool::Shutdown();
 		if (core_ != nullptr)
 		{
 			core_->getEventDispatcher().removeEventHandler(this);
@@ -129,6 +170,7 @@ public:
 	// PawnEventHandler
 	void onAmxLoad(IPawnScript& script) override
 	{
+		CheckPluginConflict();
 		AMX* amx = script.GetAMX();
 		AmxHandler::LoadAmx(amx);
 		amx_Register(amx, PluginNatives, -1);

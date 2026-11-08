@@ -3,6 +3,8 @@
 #include <exception>
 #include <functional>
 #include <unordered_set>
+#include <algorithm>
+#include <limits>
 
 #include "pathfinder.h"
 #include "connection.h"
@@ -16,60 +18,130 @@ namespace Pathfinder
 
 	struct VisitedNode
 	{
+		uint32_t generation = 0;
+		bool closed = false;
 		Node* node = nullptr;
 		VisitedNode* previous = nullptr;
 		float distance = infinity;
-		float target_distance = infinity;
+		float target_distance = -1.0f;
 		float total_distance = infinity;
 	};
 
-
-	bool NodeComparator(const VisitedNode* lhs, const VisitedNode* rhs)
+	struct VisitedNodeComparator
 	{
-		return lhs->total_distance > rhs->total_distance;
-	}
-
-
-	struct PathNotFoundException : std::exception
-	{
-		const char* what() const noexcept override
+		inline bool operator()(const VisitedNode* lhs, const VisitedNode* rhs) const noexcept
 		{
-			return "Failed to find a path!";
+			return lhs->total_distance > rhs->total_distance;
 		}
 	};
 
+	thread_local std::vector<VisitedNode> tl_visited_nodes;
+	thread_local uint32_t tl_visited_generation = 0;
 
-	Path* FindPathInternal(Node* start, Node* target, const PathType type, const RoutePreference pref, const VehicleCategory cat, const float danger_penalty, const float max_slope_gradient, const bool avoid_tolls, const bool evasive, const float vehicle_height)
+
+	bool FindPathNodes(Node* start, Node* target, std::vector<Node*>& out_nodes, float& out_length, const PathType type, const RoutePreference pref, const VehicleCategory cat, const float danger_penalty, const float max_slope_gradient, const bool avoid_tolls, const bool evasive, const float vehicle_height, const bool allow_yield)
 	{
+		out_nodes.clear();
+		out_length = 0.0f;
+
 		if (start == nullptr || target == nullptr || start->isBlocked() || target->isBlocked())
 		{
-			throw PathNotFoundException();
+			return false;
 		}
 
-		if (start == target || start->isSetForDeletion() || target->isSetForDeletion())
+		if (start->isSetForDeletion() || target->isSetForDeletion())
 		{
-			auto result = new Path(0.0f);
-			result->addNodeToEnd(start);
-			return result;
+			return false;
 		}
 
-		std::priority_queue<VisitedNode*, std::vector<VisitedNode*>, std::function<bool(VisitedNode*, VisitedNode*)>> queue(NodeComparator);
-		std::vector<VisitedNode> existing_paths(Container::Nodes::GetHighestID() + 1);
+		if (start == target)
+		{
+			out_nodes.push_back(start);
+			out_length = 0.0f;
+			return true;
+		}
+
+		const int highest_id = Container::Nodes::GetHighestID();
+		const int start_id = start->getID();
+		const int target_id = target->getID();
+		if (start_id < 0 || start_id > highest_id || target_id < 0 || target_id > highest_id)
+		{
+			return false;
+		}
+
+		if (tl_visited_nodes.size() <= static_cast<size_t>(highest_id))
+		{
+			tl_visited_nodes.resize(highest_id + 1);
+		}
+
+		++tl_visited_generation;
+		if (tl_visited_generation == 0)
+		{
+			std::fill(tl_visited_nodes.begin(), tl_visited_nodes.end(), VisitedNode{});
+			tl_visited_generation = 1;
+		}
+
+		auto get_node = [&](int id, Node* n) -> VisitedNode* {
+			auto& vn = tl_visited_nodes[id];
+			if (vn.generation != tl_visited_generation)
+			{
+				vn.generation = tl_visited_generation;
+				vn.closed = false;
+				vn.node = n;
+				vn.previous = nullptr;
+				vn.distance = infinity;
+				vn.target_distance = -1.0f;
+				vn.total_distance = infinity;
+			}
+			return &vn;
+		};
+
+		// Heuristic scale factor to ensure strict admissibility
+		float min_factor = 1.0f;
+		if (pref == ROUTE_PREF_HIGHWAYS)
+		{
+			min_factor *= 0.55f;
+		}
+		if (evasive || pref == ROUTE_PREF_EVASIVE)
+		{
+			min_factor *= (0.65f * 0.85f);
+		}
+		if (cat == VEHICLE_CAT_MOTORCYCLE)
+		{
+			min_factor *= 0.8f;
+		}
+		const float min_traffic = Container::Connections::GetMinTrafficMultiplier();
+		const float heuristic_scale = min_factor * min_traffic;
+
+		std::priority_queue<VisitedNode*, std::vector<VisitedNode*>, VisitedNodeComparator> queue;
 		VisitedNode* solution = nullptr;
 
-		const auto first_node = &existing_paths.at(start->getID());
+		auto first_node = get_node(start_id, start);
 		first_node->distance = 0.0f;
-		first_node->total_distance = first_node->target_distance = start->getDistanceFromNode(target);
-		first_node->node = start;
+		first_node->target_distance = start->getDistanceFromNode(target) * heuristic_scale;
+		first_node->total_distance = first_node->target_distance;
 		queue.push(first_node);
 
+		int iter_count = 0;
 		while (!queue.empty())
 		{
+			if (allow_yield && (++iter_count & 63) == 0 && Container::HasPendingWriters())
+			{
+				throw PathfinderYieldException();
+			}
+
 			const auto current_node = queue.top();
 			queue.pop();
 
-			if (solution != nullptr && NodeComparator(current_node, solution))
+			if (current_node->closed)
 			{
+				continue;
+			}
+			current_node->closed = true;
+
+			if (current_node->node == target)
+			{
+				solution = current_node;
 				break;
 			}
 
@@ -101,7 +173,7 @@ namespace Pathfinder
 					continue;
 				}
 
-				if (connection_target->getType() != type)
+				if (type != PATH_TYPE_ANY && connection_target->getType() != type)
 				{
 					continue;
 				}
@@ -115,7 +187,18 @@ namespace Pathfinder
 					}
 				}
 
-				auto next_node = &existing_paths.at(connection_target->getID());
+				const int conn_tgt_id = connection_target->getID();
+				if (conn_tgt_id < 0 || conn_tgt_id > highest_id)
+				{
+					continue;
+				}
+
+				auto next_node = get_node(conn_tgt_id, connection_target);
+				if (next_node->closed)
+				{
+					continue;
+				}
+
 				const auto edge_dist = connection->getDistance();
 
 				float weight_factor = 1.0f;
@@ -204,20 +287,13 @@ namespace Pathfinder
 
 				if (next_node->distance > distance)
 				{
-					if (next_node->distance == infinity)
-					{
-						next_node->node = connection_target;
-						next_node->target_distance = target->getDistanceFromNode(connection_target);
-
-						if (connection_target == target)
-						{
-							solution = next_node;
-						}
-					}
-
 					next_node->distance = distance;
 					next_node->previous = current_node;
-					next_node->total_distance = next_node->target_distance + distance;
+					if (next_node->target_distance < 0.0f)
+					{
+						next_node->target_distance = target->getDistanceFromNode(connection_target) * heuristic_scale;
+					}
+					next_node->total_distance = distance + next_node->target_distance;
 
 					queue.push(next_node);
 				}
@@ -226,79 +302,62 @@ namespace Pathfinder
 
 		if (solution == nullptr)
 		{
-			throw PathNotFoundException();
+			return false;
 		}
 
-		auto result = new Path(0.0f);
-
-		while (solution != nullptr)
+		std::vector<Node*> rev_nodes;
+		auto curr = solution;
+		while (curr != nullptr)
 		{
-			result->addNodeToStart(solution->node);
-			solution = solution->previous;
+			rev_nodes.push_back(curr->node);
+			curr = curr->previous;
 		}
+		out_nodes.assign(rev_nodes.rbegin(), rev_nodes.rend());
 
 		float actual_length = 0.0f;
-		const auto& path_nodes = result->getNodes();
-		for (size_t i = 1; i < path_nodes.size(); ++i)
+		for (size_t i = 1; i < out_nodes.size(); ++i)
 		{
-			actual_length += path_nodes[i - 1]->getDistanceFromNode(path_nodes[i]);
+			actual_length += out_nodes[i - 1]->getDistanceFromNode(out_nodes[i]);
 		}
-		result->setLength(actual_length);
-
-		auto index = 0;
-
-		for (auto node : result->getNodes())
-		{
-			node->addToPath(result, index++);
-		}
-
-		return result;
+		out_length = actual_length;
+		return true;
 	}
 
 
-	int FindPath(Node* start, Node* target, const PathType type, const RoutePreference pref, const VehicleCategory cat)
+	Path* FindPathInternal(Node* start, Node* target, const PathType type, const RoutePreference pref, const VehicleCategory cat, const float danger_penalty, const float max_slope_gradient, const bool avoid_tolls, const bool evasive, const float vehicle_height)
+	{
+		std::vector<Node*> nodes;
+		float length = 0.0f;
+		if (!FindPathNodes(start, target, nodes, length, type, pref, cat, danger_penalty, max_slope_gradient, avoid_tolls, evasive, vehicle_height))
+		{
+			return nullptr;
+		}
+
+		return Container::Paths::Register(nodes, length, nullptr);
+	}
+
+
+	int FindPath(Node* start, Node* target, const PathType type, const RoutePreference pref, const VehicleCategory cat, AMX* amx)
 	{
 		try
 		{
-			Container::LockShared();
-			const auto path = FindPathInternal(start, target, type, pref, cat);
-			Container::UnlockShared();
+			std::vector<Node*> nodes;
+			float length = 0.0f;
+			{
+				std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+				if (!FindPathNodes(start, target, nodes, length, type, pref, cat))
+				{
+					return INVALID_PATH_ID;
+				}
+			}
 
-			Container::LockExclusive();
-			const auto result = Container::Paths::Add(path);
-			Container::UnlockExclusive();
-
-			return result;
+			auto path = Container::Paths::Register(nodes, length, amx);
+			return path->getID();
 		}
-		catch (const PathNotFoundException &e)
+		catch (...)
 		{
-			Container::UnlockShared();
 			return INVALID_PATH_ID;
 		}
-	}
-
-
-	void FindPathThreaded(Node* start, Node* target, Callback* callback, const PathType type, const RoutePreference pref, const VehicleCategory cat)
-	{
-		try
-		{
-			Container::LockShared();
-			const auto path = FindPathInternal(start, target, type, pref, cat);
-			Container::UnlockShared();
-
-			Container::LockExclusive();
-			const auto result = Container::Paths::Add(path);
-			Container::UnlockExclusive();
-
-			callback->setResult(result);
-		}
-		catch (const PathNotFoundException &e)
-		{
-			Container::UnlockShared();
-			callback->setResult(INVALID_PATH_ID);
-		}
-
-		callback->getAmx()->queueCallback(callback);
 	}
 
 
@@ -306,7 +365,7 @@ namespace Pathfinder
 	{
 		if (stops.size() < 2)
 		{
-			throw PathNotFoundException();
+			return nullptr;
 		}
 
 		std::vector<Node*> ordered_stops;
@@ -343,78 +402,104 @@ namespace Pathfinder
 			ordered_stops.push_back(stops.back());
 		}
 
-		std::vector<Path*> legs;
-		try
-		{
-			for (size_t i = 0; i < ordered_stops.size() - 1; ++i)
-			{
-				Path* leg = FindPathInternal(ordered_stops[i], ordered_stops[i + 1], type, pref);
-				legs.push_back(leg);
-			}
-		}
-		catch (...)
-		{
-			for (auto leg : legs)
-			{
-				delete leg;
-			}
-			throw PathNotFoundException();
-		}
-
-		auto combined = new Path(0.0f);
+		std::vector<Node*> combined_nodes;
 		float total_length = 0.0f;
 
-		for (size_t leg_idx = 0; leg_idx < legs.size(); ++leg_idx)
+		for (size_t i = 0; i < ordered_stops.size() - 1; ++i)
 		{
-			const auto leg_nodes = legs[leg_idx]->getNodes();
-			total_length += legs[leg_idx]->getLength();
-
-			const size_t start_n = (leg_idx == 0) ? 0 : 1;
-			for (size_t n = start_n; n < leg_nodes.size(); ++n)
+			std::vector<Node*> leg_nodes;
+			float leg_length = 0.0f;
+			if (!FindPathNodes(ordered_stops[i], ordered_stops[i + 1], leg_nodes, leg_length, type, pref))
 			{
-				combined->addNodeToEnd(leg_nodes[n]);
+				return nullptr;
 			}
 
-			delete legs[leg_idx];
+			total_length += leg_length;
+			const size_t start_n = (i == 0) ? 0 : 1;
+			for (size_t n = start_n; n < leg_nodes.size(); ++n)
+			{
+				combined_nodes.push_back(leg_nodes[n]);
+			}
 		}
 
-		combined->setLength(total_length);
-
-		int index = 0;
-		for (auto node : combined->getNodes())
-		{
-			node->addToPath(combined, index++);
-		}
-
-		return combined;
+		return Container::Paths::Register(combined_nodes, total_length, nullptr);
 	}
 
 
-	int FindMultiStopPath(const std::vector<Node*>& stops, const bool optimize_order, const PathType type, const RoutePreference pref)
+	int FindMultiStopPath(const std::vector<Node*>& stops, const bool optimize_order, const PathType type, const RoutePreference pref, AMX* amx)
 	{
 		try
 		{
-			Container::LockShared();
-			const auto path = FindMultiStopPathInternal(stops, optimize_order, type, pref);
-			Container::UnlockShared();
+			std::vector<Node*> combined_nodes;
+			float total_length = 0.0f;
+			{
+				std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+				if (stops.size() < 2) return INVALID_PATH_ID;
 
-			Container::LockExclusive();
-			const auto result = Container::Paths::Add(path);
-			Container::UnlockExclusive();
+				std::vector<Node*> ordered_stops = stops;
+				if (optimize_order && stops.size() > 2)
+				{
+					std::vector<bool> visited(stops.size(), false);
+					std::vector<Node*> optimized;
+					optimized.push_back(stops[0]);
+					visited[0] = true;
 
-			return result;
+					for (size_t step = 1; step < stops.size(); ++step)
+					{
+						Node* current = optimized.back();
+						float best_dist = std::numeric_limits<float>::infinity();
+						size_t best_idx = 0;
+
+						for (size_t candidate = 1; candidate < stops.size(); ++candidate)
+						{
+							if (!visited[candidate])
+							{
+								const float d = current->getDistanceFromNode(stops[candidate]);
+								if (d < best_dist)
+								{
+									best_dist = d;
+									best_idx = candidate;
+								}
+							}
+						}
+
+						visited[best_idx] = true;
+						optimized.push_back(stops[best_idx]);
+					}
+					ordered_stops = optimized;
+				}
+
+				for (size_t i = 0; i < ordered_stops.size() - 1; ++i)
+				{
+					std::vector<Node*> leg_nodes;
+					float leg_length = 0.0f;
+					if (!FindPathNodes(ordered_stops[i], ordered_stops[i + 1], leg_nodes, leg_length, type, pref))
+					{
+						return INVALID_PATH_ID;
+					}
+
+					total_length += leg_length;
+					const size_t start_n = (i == 0) ? 0 : 1;
+					for (size_t n = start_n; n < leg_nodes.size(); ++n)
+					{
+						combined_nodes.push_back(leg_nodes[n]);
+					}
+				}
+			}
+
+			auto path = Container::Paths::Register(combined_nodes, total_length, amx);
+			return path->getID();
 		}
-		catch (const PathNotFoundException &e)
+		catch (...)
 		{
-			Container::UnlockShared();
 			return INVALID_PATH_ID;
 		}
 	}
 
 
-	int FindInterceptPath(Node* pursuer, Node* target, float target_speed_kmh, float pursuer_speed_kmh, int& out_intercept_node_id, float& out_time_to_intercept, const PathType type)
+	int FindInterceptPath(Node* pursuer, Node* target, float target_speed_kmh, float pursuer_speed_kmh, int& out_intercept_node_id, float& out_time_to_intercept, const PathType type, AMX* amx)
 	{
-		if (pursuer == nullptr || target == nullptr)
+		if (pursuer == nullptr || target == nullptr || pursuer->isSetForDeletion() || target->isSetForDeletion())
 		{
 			return INVALID_PATH_ID;
 		}
@@ -443,7 +528,7 @@ namespace Pathfinder
 			{
 				if (conn->isBlocked()) continue;
 				auto tgt = conn->getTarget();
-				if (tgt == nullptr || tgt->isBlocked() || tgt->getType() != type) continue;
+				if (tgt == nullptr || tgt->isBlocked() || tgt->isSetForDeletion() || (type != PATH_TYPE_ANY && tgt->getType() != type)) continue;
 				if (visited_target_ids.find(tgt->getID()) != visited_target_ids.end()) continue;
 
 				float score = conn->getRoadWidth() + conn->getDistance();
@@ -467,44 +552,53 @@ namespace Pathfinder
 		Node* chosen_intercept_node = projected_nodes.back();
 		float chosen_time = projected_times.back();
 		int chosen_path_id = INVALID_PATH_ID;
+		std::vector<Node*> chosen_nodes;
+		float chosen_length = 0.0f;
 
 		for (size_t i = 1; i < projected_nodes.size(); ++i)
 		{
 			Node* candidate = projected_nodes[i];
+			if (candidate == nullptr || candidate->isSetForDeletion()) continue;
 			const float t_target = projected_times[i];
 			const float approx_pursuer_dist = pursuer->getDistanceFromNode(candidate) * 1.25f;
 			const float approx_pursuer_time = approx_pursuer_dist / v_pursuer;
 
 			if (approx_pursuer_time <= t_target + 2.0f)
 			{
-				int path_id = FindPath(pursuer, candidate, type, ROUTE_PREF_HIGHWAYS);
-				if (path_id != INVALID_PATH_ID)
+				std::vector<Node*> cand_nodes;
+				float cand_len = 0.0f;
+				if (FindPathNodes(pursuer, candidate, cand_nodes, cand_len, type, ROUTE_PREF_HIGHWAYS))
 				{
-					auto path_obj = Container::Paths::Find(path_id);
-					if (path_obj != nullptr)
+					const float actual_time = cand_len / v_pursuer;
+					if (actual_time <= t_target + 3.0f || i == projected_nodes.size() - 1)
 					{
-						const float actual_time = path_obj->getLength() / v_pursuer;
-						if (actual_time <= t_target + 3.0f || i == projected_nodes.size() - 1)
-						{
-							chosen_intercept_node = candidate;
-							chosen_time = actual_time;
-							chosen_path_id = path_id;
-							break;
-						}
+						chosen_intercept_node = candidate;
+						chosen_time = actual_time;
+						chosen_nodes = std::move(cand_nodes);
+						chosen_length = cand_len;
+						break;
 					}
 				}
 			}
 		}
 
-		if (chosen_path_id == INVALID_PATH_ID)
+		if (chosen_nodes.empty())
 		{
-			chosen_path_id = FindPath(pursuer, target, type, ROUTE_PREF_HIGHWAYS);
-			if (chosen_path_id != INVALID_PATH_ID)
+			std::vector<Node*> cand_nodes;
+			float cand_len = 0.0f;
+			if (FindPathNodes(pursuer, target, cand_nodes, cand_len, type, ROUTE_PREF_HIGHWAYS))
 			{
-				auto path_obj = Container::Paths::Find(chosen_path_id);
-				chosen_time = (path_obj != nullptr) ? (path_obj->getLength() / v_pursuer) : 0.0f;
+				chosen_time = cand_len / v_pursuer;
 				chosen_intercept_node = target;
+				chosen_nodes = std::move(cand_nodes);
+				chosen_length = cand_len;
 			}
+		}
+
+		if (!chosen_nodes.empty())
+		{
+			auto path = Container::Paths::Register(chosen_nodes, chosen_length, amx);
+			chosen_path_id = path->getID();
 		}
 
 		out_intercept_node_id = (chosen_intercept_node != nullptr) ? chosen_intercept_node->getID() : target->getID();
@@ -516,7 +610,7 @@ namespace Pathfinder
 	std::vector<int> GetReachableNodes(Node* source, const float limit_value, const bool by_time, const float speed_kmh, const PathType type)
 	{
 		std::vector<int> reachable_ids;
-		if (source == nullptr || source->isBlocked() || limit_value <= 0.0f)
+		if (source == nullptr || source->isBlocked() || source->isSetForDeletion() || limit_value <= 0.0f)
 		{
 			return reachable_ids;
 		}
@@ -549,7 +643,7 @@ namespace Pathfinder
 			{
 				if (conn->isBlocked()) continue;
 				auto target = conn->getTarget();
-				if (target == nullptr || target->isBlocked() || target->getType() != type) continue;
+				if (target == nullptr || target->isBlocked() || target->isSetForDeletion() || (type != PATH_TYPE_ANY && target->getType() != type)) continue;
 
 				float edge_cost = conn->getDistance();
 				if (by_time)
@@ -573,6 +667,7 @@ namespace Pathfinder
 	bool IsMapNodeDeadEnd(Node* node)
 	{
 		if (node == nullptr) return true;
+		if (node->getOutDegree() <= 1) return true;
 		const auto& conns = node->getConnections();
 		int active_out = 0;
 		for (auto c : conns)
@@ -582,7 +677,10 @@ namespace Pathfinder
 				auto tgt = c->getTarget();
 				if (tgt != nullptr && tgt != node && !tgt->isBlocked())
 				{
-					active_out++;
+					if (++active_out > 1)
+					{
+						return false;
+					}
 				}
 			}
 		}
@@ -590,95 +688,103 @@ namespace Pathfinder
 	}
 
 
-	int FindSafePath(Node* start, Node* target, float danger_penalty, const PathType type, const RoutePreference pref)
+	int FindSafePath(Node* start, Node* target, float danger_penalty, const PathType type, const RoutePreference pref, AMX* amx)
 	{
 		try
 		{
-			Container::LockShared();
-			const auto path = FindPathInternal(start, target, type, pref, VEHICLE_CAT_STANDARD, danger_penalty, 0.0f, false, false);
-			Container::UnlockShared();
+			std::vector<Node*> nodes;
+			float length = 0.0f;
+			{
+				std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+				if (!FindPathNodes(start, target, nodes, length, type, pref, VEHICLE_CAT_STANDARD, danger_penalty, 0.0f, false, false))
+				{
+					return INVALID_PATH_ID;
+				}
+			}
 
-			Container::LockExclusive();
-			const auto result = Container::Paths::Add(path);
-			Container::UnlockExclusive();
-
-			return result;
+			auto path = Container::Paths::Register(nodes, length, amx);
+			return path->getID();
 		}
-		catch (const PathNotFoundException &e)
+		catch (...)
 		{
-			Container::UnlockShared();
 			return INVALID_PATH_ID;
 		}
 	}
 
 
-	int FindEcoPath(Node* start, Node* target, float max_slope_gradient, const PathType type)
+	int FindEcoPath(Node* start, Node* target, float max_slope_gradient, const PathType type, AMX* amx)
 	{
 		try
 		{
-			Container::LockShared();
-			const auto path = FindPathInternal(start, target, type, ROUTE_PREF_ECO, VEHICLE_CAT_STANDARD, 0.0f, max_slope_gradient, false, false);
-			Container::UnlockShared();
+			std::vector<Node*> nodes;
+			float length = 0.0f;
+			{
+				std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+				if (!FindPathNodes(start, target, nodes, length, type, ROUTE_PREF_ECO, VEHICLE_CAT_STANDARD, 0.0f, max_slope_gradient, false, false))
+				{
+					return INVALID_PATH_ID;
+				}
+			}
 
-			Container::LockExclusive();
-			const auto result = Container::Paths::Add(path);
-			Container::UnlockExclusive();
-
-			return result;
+			auto path = Container::Paths::Register(nodes, length, amx);
+			return path->getID();
 		}
-		catch (const PathNotFoundException &e)
+		catch (...)
 		{
-			Container::UnlockShared();
 			return INVALID_PATH_ID;
 		}
 	}
 
 
-	int FindEvasivePath(Node* start, Node* target, const PathType type)
+	int FindEvasivePath(Node* start, Node* target, const PathType type, AMX* amx)
 	{
 		try
 		{
-			Container::LockShared();
-			const auto path = FindPathInternal(start, target, type, ROUTE_PREF_EVASIVE, VEHICLE_CAT_STANDARD, 0.0f, 0.0f, false, true);
-			Container::UnlockShared();
+			std::vector<Node*> nodes;
+			float length = 0.0f;
+			{
+				std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+				if (!FindPathNodes(start, target, nodes, length, type, ROUTE_PREF_EVASIVE, VEHICLE_CAT_STANDARD, 0.0f, 0.0f, false, true))
+				{
+					return INVALID_PATH_ID;
+				}
+			}
 
-			Container::LockExclusive();
-			const auto result = Container::Paths::Add(path);
-			Container::UnlockExclusive();
-
-			return result;
+			auto path = Container::Paths::Register(nodes, length, amx);
+			return path->getID();
 		}
-		catch (const PathNotFoundException &e)
+		catch (...)
 		{
-			Container::UnlockShared();
 			return INVALID_PATH_ID;
 		}
 	}
 
 
-	int FindPathAvoidTolls(Node* start, Node* target, const PathType type, const RoutePreference pref)
+	int FindPathAvoidTolls(Node* start, Node* target, const PathType type, const RoutePreference pref, AMX* amx)
 	{
 		try
 		{
-			Container::LockShared();
-			const auto path = FindPathInternal(start, target, type, pref, VEHICLE_CAT_STANDARD, 0.0f, 0.0f, true, false);
-			Container::UnlockShared();
+			std::vector<Node*> nodes;
+			float length = 0.0f;
+			{
+				std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+				if (!FindPathNodes(start, target, nodes, length, type, pref, VEHICLE_CAT_STANDARD, 0.0f, 0.0f, true, false))
+				{
+					return INVALID_PATH_ID;
+				}
+			}
 
-			Container::LockExclusive();
-			const auto result = Container::Paths::Add(path);
-			Container::UnlockExclusive();
-
-			return result;
+			auto path = Container::Paths::Register(nodes, length, amx);
+			return path->getID();
 		}
-		catch (const PathNotFoundException &e)
+		catch (...)
 		{
-			Container::UnlockShared();
 			return INVALID_PATH_ID;
 		}
 	}
 
 
-	int FindNearestPointByRoad(float from_x, float from_y, float from_z, const std::vector<std::tuple<float, float, float>>& destinations, int& out_nearest_index, float& out_road_distance, int& out_path_id, PathType type)
+	int FindNearestPointByRoad(float from_x, float from_y, float from_z, const std::vector<std::tuple<float, float, float>>& destinations, int& out_nearest_index, float& out_road_distance, int& out_path_id, PathType type, AMX* amx, bool create_path)
 	{
 		out_nearest_index = -1;
 		out_road_distance = infinity;
@@ -686,11 +792,10 @@ namespace Pathfinder
 
 		if (destinations.empty()) return -1;
 
-		Container::LockShared();
+		std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
 		Node* start = Container::Nodes::FindClosest(from_x, from_y, from_z, type);
 		if (start == nullptr || start->isBlocked())
 		{
-			Container::UnlockShared();
 			return -1;
 		}
 
@@ -706,17 +811,48 @@ namespace Pathfinder
 
 		if (target_node_map.empty())
 		{
-			Container::UnlockShared();
 			return -1;
 		}
 
-		std::priority_queue<VisitedNode*, std::vector<VisitedNode*>, std::function<bool(VisitedNode*, VisitedNode*)>> queue(NodeComparator);
-		std::vector<VisitedNode> existing_paths(Container::Nodes::GetHighestID() + 1);
+		const int highest_id = Container::Nodes::GetHighestID();
+		const int start_id = start->getID();
+		if (start_id < 0 || start_id > highest_id)
+		{
+			return -1;
+		}
 
-		const auto first_node = &existing_paths.at(start->getID());
+		if (tl_visited_nodes.size() <= static_cast<size_t>(highest_id))
+		{
+			tl_visited_nodes.resize(highest_id + 1);
+		}
+
+		++tl_visited_generation;
+		if (tl_visited_generation == 0)
+		{
+			std::fill(tl_visited_nodes.begin(), tl_visited_nodes.end(), VisitedNode{});
+			tl_visited_generation = 1;
+		}
+
+		auto get_node = [&](int id, Node* n) -> VisitedNode* {
+			auto& vn = tl_visited_nodes[id];
+			if (vn.generation != tl_visited_generation)
+			{
+				vn.generation = tl_visited_generation;
+				vn.closed = false;
+				vn.node = n;
+				vn.previous = nullptr;
+				vn.distance = infinity;
+				vn.target_distance = 0.0f;
+				vn.total_distance = infinity;
+			}
+			return &vn;
+		};
+
+		std::priority_queue<VisitedNode*, std::vector<VisitedNode*>, VisitedNodeComparator> queue;
+
+		const auto first_node = get_node(start_id, start);
 		first_node->distance = 0.0f;
 		first_node->total_distance = 0.0f;
-		first_node->node = start;
 		queue.push(first_node);
 
 		VisitedNode* solution = nullptr;
@@ -727,6 +863,12 @@ namespace Pathfinder
 		{
 			const auto current = queue.top();
 			queue.pop();
+
+			if (current->closed)
+			{
+				continue;
+			}
+			current->closed = true;
 
 			if (current->distance > best_total_dist)
 			{
@@ -755,15 +897,19 @@ namespace Pathfinder
 			{
 				if (connection->isBlocked()) continue;
 				auto target = connection->getTarget();
-				if (target == nullptr || target == current->node || target->isSetForDeletion() || target->isBlocked() || target->getType() != type) continue;
+				if (target == nullptr || target == current->node || target->isSetForDeletion() || target->isBlocked() || (type != PATH_TYPE_ANY && target->getType() != type)) continue;
 
-				auto next_node = &existing_paths.at(target->getID());
+				const int target_id = target->getID();
+				if (target_id < 0 || target_id > highest_id) continue;
+
+				auto next_node = get_node(target_id, target);
+				if (next_node->closed) continue;
+
 				const float cost = connection->getDistance() * connection->getTrafficMultiplier();
 				const float distance = current->distance + cost;
 
 				if (next_node->distance > distance)
 				{
-					next_node->node = target;
 					next_node->distance = distance;
 					next_node->previous = current;
 					next_node->total_distance = distance;
@@ -771,8 +917,6 @@ namespace Pathfinder
 				}
 			}
 		}
-
-		Container::UnlockShared();
 
 		if (solution == nullptr || matched_dest_idx == -1)
 		{
@@ -782,31 +926,30 @@ namespace Pathfinder
 		out_nearest_index = matched_dest_idx;
 		out_road_distance = best_total_dist;
 
-		auto result_path = new Path(0.0f);
-		auto curr = solution;
-		while (curr != nullptr)
+		if (create_path && amx != nullptr)
 		{
-			result_path->addNodeToStart(curr->node);
-			curr = curr->previous;
-		}
+			std::vector<Node*> rev_nodes;
+			auto curr = solution;
+			while (curr != nullptr)
+			{
+				rev_nodes.push_back(curr->node);
+				curr = curr->previous;
+			}
 
-		float actual_length = 0.0f;
-		const auto& pnodes = result_path->getNodes();
-		for (size_t i = 1; i < pnodes.size(); ++i)
+			std::vector<Node*> forward_nodes(rev_nodes.rbegin(), rev_nodes.rend());
+			float actual_length = 0.0f;
+			for (size_t i = 1; i < forward_nodes.size(); ++i)
+			{
+				actual_length += forward_nodes[i - 1]->getDistanceFromNode(forward_nodes[i]);
+			}
+
+			auto result_path = Container::Paths::Register(forward_nodes, actual_length, amx);
+			out_path_id = (result_path != nullptr) ? result_path->getID() : INVALID_PATH_ID;
+		}
+		else
 		{
-			actual_length += pnodes[i - 1]->getDistanceFromNode(pnodes[i]);
+			out_path_id = INVALID_PATH_ID;
 		}
-		result_path->setLength(actual_length);
-
-		int idx = 0;
-		for (auto n : result_path->getNodes())
-		{
-			n->addToPath(result_path, idx++);
-		}
-
-		Container::LockExclusive();
-		out_path_id = Container::Paths::Add(result_path);
-		Container::UnlockExclusive();
 
 		return 0;
 	}
@@ -900,7 +1043,7 @@ namespace Pathfinder
 					dx /= dxy;
 					dy /= dxy;
 
-					float bearing = std::atan2(dx, dy) * 180.0f / 3.14159265358979323846f;
+					float bearing = std::atan2(-dx, dy) * 180.0f / 3.14159265358979323846f;
 					if (bearing < 0.0f) bearing += 360.0f;
 					if (bearing >= 360.0f) bearing -= 360.0f;
 
@@ -928,45 +1071,49 @@ namespace Pathfinder
 	}
 
 
-	int FindPathPavedOnly(Node* start, Node* target, const PathType type)
+	int FindPathPavedOnly(Node* start, Node* target, const PathType type, AMX* amx)
 	{
 		try
 		{
-			Container::LockShared();
-			const auto path = FindPathInternal(start, target, type, ROUTE_PREF_PAVED_ONLY, VEHICLE_CAT_STANDARD, 0.0f, 0.0f, false, false, 0.0f);
-			Container::UnlockShared();
+			std::vector<Node*> nodes;
+			float length = 0.0f;
+			{
+				std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+				if (!FindPathNodes(start, target, nodes, length, type, ROUTE_PREF_PAVED_ONLY, VEHICLE_CAT_STANDARD, 0.0f, 0.0f, false, false, 0.0f))
+				{
+					return INVALID_PATH_ID;
+				}
+			}
 
-			Container::LockExclusive();
-			const auto result = Container::Paths::Add(path);
-			Container::UnlockExclusive();
-
-			return result;
+			auto path = Container::Paths::Register(nodes, length, amx);
+			return path->getID();
 		}
-		catch (const PathNotFoundException &e)
+		catch (...)
 		{
-			Container::UnlockShared();
 			return INVALID_PATH_ID;
 		}
 	}
 
 
-	int FindPathWithHeightLimit(Node* start, Node* target, float vehicle_height, const PathType type, const RoutePreference pref)
+	int FindPathWithHeightLimit(Node* start, Node* target, float vehicle_height, const PathType type, const RoutePreference pref, AMX* amx)
 	{
 		try
 		{
-			Container::LockShared();
-			const auto path = FindPathInternal(start, target, type, pref, VEHICLE_CAT_STANDARD, 0.0f, 0.0f, false, false, vehicle_height);
-			Container::UnlockShared();
+			std::vector<Node*> nodes;
+			float length = 0.0f;
+			{
+				std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+				if (!FindPathNodes(start, target, nodes, length, type, pref, VEHICLE_CAT_STANDARD, 0.0f, 0.0f, false, false, vehicle_height))
+				{
+					return INVALID_PATH_ID;
+				}
+			}
 
-			Container::LockExclusive();
-			const auto result = Container::Paths::Add(path);
-			Container::UnlockExclusive();
-
-			return result;
+			auto path = Container::Paths::Register(nodes, length, amx);
+			return path->getID();
 		}
-		catch (const PathNotFoundException &e)
+		catch (...)
 		{
-			Container::UnlockShared();
 			return INVALID_PATH_ID;
 		}
 	}

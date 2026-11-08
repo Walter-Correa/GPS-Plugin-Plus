@@ -12,7 +12,7 @@ Welcome to the technical documentation for **GPS Plugin Plus** (SA-MP & open.mp)
 | **[🗺️ Pathfinding & Routing](pathfinding-and-routing.md)** | Synchronous vs. threaded execution, PawnPlus async tasks, multi-modal routing (vehicles, pedestrians, boats), routing preferences, roadblocks, traffic congestion, safe-routing, eco-routing, tolls, height clearances, and vehicle category constraints. |
 | **[🧭 Navigation & Geometry](navigation-and-geometry.md)** | Real-time GPS progress tracking, ETA and distance metrics, turn-by-turn guidance (`TurnDirection`), roundabout detection with exit counting, Catmull-Rom spline path smoothing, Douglas-Peucker route decimation, delta re-routing rejoin points, and lateral offset calculation. |
 | **[🤖 AI & Traffic Simulation](ai-and-traffic-simulation.md)** | Pure Pursuit autonomous bot steering controller, high-speed police interception vectors, tactical fugitive anti-dead-end evasion, Waze-style speed radars, nearest service lookup by real road distance, reachability isochrones, tunnel detection, and wrong-way traffic enforcement. |
-| **[📍 Map Nodes & Spatial Analytics](map-nodes-and-spatial.md)** | Graph node architecture, dynamic node & connection lifecycle, multi-lane road geometry, spatial proximity queries, curb-side vehicle snapping, San Andreas neighborhood zones, binary path serialization, and automatic memory TTL cleanup. |
+| **[📍 Map Nodes & Spatial Analytics](map-nodes-and-spatial.md)** | Graph node architecture, dynamic node & connection lifecycle, multi-lane road geometry, spatial proximity queries, curb-side vehicle snapping, San Andreas neighborhood zones, path text serialization, and automatic memory TTL cleanup. |
 | **[📚 Complete API Reference](api-reference.md)** | Exhaustive technical dictionary covering all 105 native functions, callbacks, enums, error codes, and PawnPlus asynchronous stocks. |
 
 ---
@@ -25,11 +25,11 @@ Find immediate guidance based on your development goal:
   * Read [Installation & Setup](getting-started.md#1-prerequisites--installation).
   * Configure `server.cfg` (SA-MP) or `config.json` (open.mp).
 * **I am migrating an existing gamemode from Amyr Ahmady's GPS Plugin:**
-  * Read [Drop-In Migration from Legacy GPS](getting-started.md#2-drop-in-migration-from-legacy-gps).
-  * 100% backward-compatible: no existing code changes required.
+  * Read [Drop-In Migration from Legacy GPS](getting-started.md#4-drop-in-migration-from-legacy-gps).
+  * Drop-in compatible: no existing code changes required (see the migration notes).
 * **I want to calculate routes asynchronously without lagging the server tick rate:**
   * Read [Threaded & Asynchronous Pathfinding](pathfinding-and-routing.md#1-synchronous-vs-asynchronous-pathfinding).
-  * Use `FindPathThreaded` / `FindPathThreadedEx` with a callback or `await FindPathAsync(source, target)` with PawnPlus tasks.
+  * Use `FindPathThreaded` / `FindPathThreadedEx` with a callback or `task_await(FindPathAsync(source, target))` with PawnPlus tasks.
 * **I want to build a real-time turn-by-turn navigation HUD (Waze / Google Maps style):**
   * Read [Real-Time Navigation Tracking & Maneuvers](navigation-and-geometry.md#1-real-time-path-tracking--progress).
   * Use `GetPathProgress`, `GetPathRemainingInfo`, and `GetPathNextManeuver`.
@@ -50,7 +50,7 @@ Find immediate guidance based on your development goal:
   * Read [Curb-Side Snapping & Road Alignment](map-nodes-and-spatial.md#4-road-position--curb-side-alignment).
   * Use `GetRoadPositionInfo(x, y, z, out_x, out_y, out_z, angle, road_width, ROAD_POS_CURB)`.
 * **I want to simulate dynamic traffic jams, road closures, or toll booths:**
-  * Read [Dynamic Roadblocks & Congestion](pathfinding-and-routing.md#5-dynamic-roadblocks--detours) and [Toll Roads](pathfinding-and-routing.md#8-toll-roads--bridges).
+  * Read [Dynamic Roadblocks & Congestion](pathfinding-and-routing.md#5-dynamic-roadblocks--detours) and [Toll Roads & Bridge Passes](pathfinding-and-routing.md#9-toll-roads--bridge-passes).
   * Use `SetConnectionTrafficMultiplier`, `SetConnectionBlocked`, and `SetConnectionToll`.
 
 ---
@@ -61,15 +61,10 @@ Find immediate guidance based on your development goal:
   * **SA-MP:** `0.3.7-R1` through `0.3.7-R5` (x86 32-bit).
   * **open.mp:** All active releases via native Component (`GPS-Component-Plus`) or Legacy Plugin (`GPS-Plugin-Plus`).
 * **Operating Systems:**
-  * **Windows:** Windows 7 / 8 / 10 / 11, Windows Server 2012+ (Requires MSVC 2022 C++ x86 Redistributable).
-  * **Linux:** Debian 10+, Ubuntu 18.04+, CentOS 7+, Alpine (glibc) 32-bit.
+  * **Windows:** Windows 7 / 8 / 10 / 11, Windows Server 2008 R2+ (32-bit x86). Zero external dependencies: statically linked runtime (`/MT`), requiring only standard Windows system libraries (`KERNEL32.dll`). No MSVC Redistributable required.
+  * **Linux:** Debian 10+, Ubuntu 20.04+, RHEL/Alma/Rocky 8+ (32-bit x86, glibc ≥ 2.28).
 * **Compiler Support:**
   * Community Pawn Compiler (Pawn 3.10.x by Southclaws/Zeex) - *Recommended*.
   * Official Pawn 3.2.3664 (legacy SA-MP default).
 * **Optional Dependencies:**
-  * **PawnPlus** (by IllidanS4): Enables modern task-based asynchronous programming via `await FindPathAsync(...)`.
-
----
-
-> [!NOTE]
-> All code snippets and architecture tutorials in these documents are production-ready, thread-safe, and tested for high-concurrency multi-player servers.
+  * **PawnPlus** (by IllidanS4): Enables modern task-based asynchronous programming via `task_await(FindPathAsync(...))` (or `await` syntax with `#define PP_SYNTAX_AWAIT`).

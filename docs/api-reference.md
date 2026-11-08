@@ -40,7 +40,7 @@ Allocates a new custom map node at the specified 3D coordinate.
 * **`x, y, z`:** World coordinates.
 * **`&nodeid`:** Output parameter receiving the newly allocated node ID.
 * **`type`:** Transportation layer (`PATH_TYPE_VEHICLE`, `PATH_TYPE_PEDESTRIAN`, `PATH_TYPE_BOAT`).
-* **`flags`:** Bitwise node properties (`NODE_FLAG_HIGHWAY`, `NODE_FLAG_CROSSWALK`, etc.).
+* **`flags`:** Bitwise node properties (`NODE_FLAG_HIGHWAY`, `NODE_FLAG_CROSSWALK`, etc.). Note that `NODE_FLAG_EMERGENCY_ONLY` (2) and `NODE_FLAG_ROADBLOCK` (4) are dataset metadata flags present in `GPS.dat`; they describe road attributes but do not automatically prevent routing. Use `SetMapNodeBlocked` to block path traversal dynamically.
 * **Returns:** `GPS_ERROR_NONE` (0) on success, or a negative `GPS_ERROR` code.
 
 ---
@@ -94,7 +94,7 @@ Queries bitwise flags attached to a node.
 ```pawn
 native GetHighestMapNodeID(PathType:type = PATH_TYPE_VEHICLE);
 ```
-Returns the maximum active node ID in the graph for the given transport type.
+Returns the maximum active node ID in the graph for the given transport type (defaults to `PATH_TYPE_VEHICLE`). Pass `PATH_TYPE_ANY` to query the highest ID across all modalities (vehicles, pedestrians, and boats), matching legacy v1.x behavior.
 
 ---
 
@@ -127,7 +127,7 @@ Samples a random map node bounded within a 2D/3D axis-aligned bounding box.
 ```pawn
 native SaveMapNodesToFile(const filename[]);
 ```
-Serializes the current active in-memory node and connection graph into a `.dat` binary file.
+Serializes the current active in-memory node and connection graph into a `.dat` text file.
 
 ---
 
@@ -175,6 +175,22 @@ native GetMapNodeConnectionCount(MapNode:nodeid, &count);
 native GetMapNodeConnection(MapNode:nodeid, index, &Connection:connectionid);
 ```
 Iterates through all outward connections leaving a given map node.
+
+---
+
+### `GetMapNodeConnectionTarget`
+```pawn
+native GetMapNodeConnectionTarget(MapNode:nodeid, index, &MapNode:target_nodeid);
+```
+Retrieves the target destination map node ID for the given outward connection index from a map node.
+
+---
+
+### `IsMapNodeIntersection`
+```pawn
+native bool:IsMapNodeIntersection(MapNode:nodeid, &connection_count = 0);
+```
+Determines if a map node is an intersection (3 or more outward connections) and optionally writes the total connection count.
 
 ---
 
@@ -281,6 +297,11 @@ Snaps a coordinate to the road centerline (`ROAD_POS_CENTER`), sidewalk curb (`R
 ---
 
 ## 4. Pathfinding & Routing
+
+> [!IMPORTANT]
+> **Script Ownership & Memory Management**: Paths created by a script (gamemode or filterscript) are tracked per AMX instance. When a script is unloaded (e.g. during `gmx` or filterscript unload), all paths belonging to that script are automatically destroyed and freed, preventing orphan path leaks.
+> 
+> **Input Validation**: All pathfinding routines validate `PathType` and `RoutePreference` parameters against known bounds. If an invalid type or preference is passed, the function aborts immediately and returns `GPS_ERROR_INVALID_PATH_TYPE` (-2) or `GPS_ERROR_INVALID_ROUTE_PREF` (-3).
 
 ### `FindPath`
 ```pawn
@@ -418,6 +439,9 @@ native GetPathProgress(
 );
 ```
 Matches current vehicle coordinates onto the path, outputting current step index and off-route state.
+
+> [!TIP]
+> `GetPathProgress` and `GetPathNextManeuver` project onto path segments. Calling them inside a 250ms–500ms timer provides an optimal balance between responsiveness and peak server tick rates.
 
 ---
 
@@ -586,11 +610,14 @@ native FindNearestPointByRoad(
     total_points, 
     &nearest_index, 
     &Float:road_distance, 
-    &Path:pathid = Path:0, 
+    &Path:pathid = GPS_INVALID_PATH_ID, 
     PathType:type = PATH_TYPE_VEHICLE
 );
 ```
 Searches a list of 3D destination candidates, returning the index with the shortest **actual road driving distance**.
+
+> [!NOTE]
+> Parameter `pathid` is optional (default: `GPS_INVALID_PATH_ID`). If omitted or passed as `GPS_INVALID_PATH_ID`, no path object is registered in memory, preventing path leaks on pure distance/nearest-index lookups.
 
 ---
 
@@ -601,6 +628,9 @@ native bool:UnregisterRoadRadar(radarid);
 native ClearRoadRadars();
 ```
 Manages fixed or mobile speed radar cameras in the world.
+
+> [!NOTE]
+> Radars are stored globally in the server process. `GetNextPathRadar` evaluates cameras within `alert_radius` (default: 300m) of any upcoming segment of the path, including adjacent parallel streets within that radius.
 
 ---
 
@@ -779,7 +809,10 @@ Arms a path with an automatic TTL garbage collection timer, freeing C++ memory a
 native SavePathToFile(Path:pathid, const filename[]);
 native LoadPathFromFile(const filename[], &Path:pathid);
 ```
-Serializes and restores paths to/from binary files on disk.
+Serializes and restores paths to/from text files on disk.
+
+> [!IMPORTANT]
+> **Path Traversal Protection**: File operations are strictly sandboxed inside the server `scriptfiles/` directory. Path traversal sequences (`..`), absolute paths (`C:\`, `/`), drive colons, and leading slashes are rejected with `GPS_ERROR_INVALID_FILE` (-9).
 
 ---
 
@@ -933,3 +966,6 @@ enum PathNodeFlags (<<= 1)
     NODE_FLAG_ONEWAY
 }
 ```
+
+> [!NOTE]
+> `NODE_FLAG_EMERGENCY_ONLY` (2) and `NODE_FLAG_ROADBLOCK` (4) originate from San Andreas map metadata in `GPS.dat` (tagged on over 7,600 nodes). They serve as descriptive road attributes and do **not** automatically exclude nodes during A* pathfinding. To dynamically block roads or intersections, use `SetMapNodeBlocked(nodeid, true)` or `SetConnectionBlocked(connectionid, true)`.

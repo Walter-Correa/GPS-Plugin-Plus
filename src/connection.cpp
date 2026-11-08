@@ -1,132 +1,101 @@
 #include <cmath>
-
 #include "connection.h"
 #include "node.h"
 
-
 Connection::Connection(const int id, Node* source, Node* target, const float distance, const float road_width, const int left_lanes, const int right_lanes, const bool one_way)
+	: id_(id), source_(source), target_(target), distance_(distance),
+	  road_width_(road_width), left_lanes_(left_lanes), right_lanes_(right_lanes), one_way_(one_way),
+	  blocked_(false), traffic_multiplier_(1.0f), has_toll_(false), toll_cost_(0),
+	  is_paved_(road_width >= 5.5f), speed_limit_(0.0f), max_height_(0.0f)
 {
-	id_ = id;
-	source_ = source;
-	target_ = target;
-	distance_ = distance;
-
-	road_width_ = road_width;
-	left_lanes_ = left_lanes;
-	right_lanes_ = right_lanes;
-	one_way_ = one_way;
-	blocked_ = false;
-	traffic_multiplier_ = 1.0f;
-	has_toll_ = false;
-	toll_cost_ = 0;
-	is_paved_ = (road_width_ >= 5.5f);
-	speed_limit_ = 0.0f;
-	max_height_ = 0.0f;
 }
-
 
 int Connection::getId() const
 {
 	return id_;
 }
 
-
 Node* Connection::getSource() const
 {
 	return source_;
 }
-
 
 Node* Connection::getTarget() const
 {
 	return target_;
 }
 
-
 float Connection::getDistance() const
 {
 	return distance_;
 }
-
 
 float Connection::getRoadWidth() const
 {
 	return road_width_;
 }
 
-
 int Connection::getLeftLanes() const
 {
 	return left_lanes_;
 }
-
 
 int Connection::getRightLanes() const
 {
 	return right_lanes_;
 }
 
-
 bool Connection::isOneWay() const
 {
 	return one_way_;
 }
 
-
 bool Connection::isBlocked() const
 {
-	return blocked_;
+	return blocked_.load(std::memory_order_relaxed);
 }
-
 
 void Connection::setBlocked(const bool blocked)
 {
-	blocked_ = blocked;
+	blocked_.store(blocked, std::memory_order_relaxed);
 }
-
 
 float Connection::getTrafficMultiplier() const
 {
-	return traffic_multiplier_;
+	return traffic_multiplier_.load(std::memory_order_relaxed);
 }
-
 
 void Connection::setTrafficMultiplier(const float multiplier)
 {
-	traffic_multiplier_ = (multiplier < 0.01f) ? 0.01f : multiplier;
+	const float clamped = (multiplier < 0.01f) ? 0.01f : multiplier;
+	traffic_multiplier_.store(clamped, std::memory_order_relaxed);
 }
-
 
 bool Connection::hasToll() const
 {
-	return has_toll_;
+	return has_toll_.load(std::memory_order_relaxed);
 }
-
 
 void Connection::setToll(const bool has_toll, const int cost)
 {
-	has_toll_ = has_toll;
-	toll_cost_ = cost;
+	has_toll_.store(has_toll, std::memory_order_relaxed);
+	toll_cost_.store(cost, std::memory_order_relaxed);
 }
-
 
 int Connection::getTollCost() const
 {
-	return toll_cost_;
+	return toll_cost_.load(std::memory_order_relaxed);
 }
-
 
 bool Connection::isPaved() const
 {
-	return is_paved_;
+	return is_paved_.load(std::memory_order_relaxed);
 }
-
 
 void Connection::setPaved(const bool paved)
 {
-	is_paved_ = paved;
+	is_paved_.store(paved, std::memory_order_relaxed);
 }
-
 
 RoadClass Connection::getRoadClass() const
 {
@@ -145,12 +114,12 @@ RoadClass Connection::getRoadClass() const
 	return ROAD_CLASS_RESIDENTIAL;
 }
 
-
 float Connection::getSpeedLimit() const
 {
-	if (speed_limit_ > 0.0f)
+	const float limit = speed_limit_.load(std::memory_order_relaxed);
+	if (limit > 0.0f)
 	{
-		return speed_limit_;
+		return limit;
 	}
 
 	switch (getRoadClass())
@@ -163,24 +132,22 @@ float Connection::getSpeedLimit() const
 	}
 }
 
-
 void Connection::setSpeedLimit(const float speed)
 {
-	speed_limit_ = (speed < 0.0f) ? 0.0f : speed;
+	const float clamped = (speed < 0.0f) ? 0.0f : speed;
+	speed_limit_.store(clamped, std::memory_order_relaxed);
 }
-
 
 float Connection::getMaxHeight() const
 {
-	return max_height_;
+	return max_height_.load(std::memory_order_relaxed);
 }
-
 
 void Connection::setMaxHeight(const float height)
 {
-	max_height_ = (height < 0.0f) ? 0.0f : height;
+	const float clamped = (height < 0.0f) ? 0.0f : height;
+	max_height_.store(clamped, std::memory_order_relaxed);
 }
-
 
 bool Connection::getLanePosition(const int lane_index, float& out_x, float& out_y, float& out_z) const
 {

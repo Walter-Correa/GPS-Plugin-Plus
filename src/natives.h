@@ -1,6 +1,7 @@
 #pragma once
 
 #include "pathfinder.h"
+#include "logger.h"
 
 
 enum
@@ -17,7 +18,14 @@ enum
 #define CHECK_PARAMS(n) \
 	if (params[0] != (n * 4)) \
 	{ \
-		std::cout << __func__ << ": Expecting " << n << " parameter(s), but found " << (params[0] / sizeof(cell)) << ".\n"; \
+		GPSLogger::Log("%s: Expecting %d parameter(s), but found %d.", __func__, (int)(n), (int)(params[0] / sizeof(cell))); \
+		return GPS_ERROR_INVALID_PARAMS; \
+	}
+
+#define CHECK_PARAMS_MIN(n) \
+	if (params[0] < (n * 4)) \
+	{ \
+		GPSLogger::Log("%s: Expecting at least %d parameter(s), but found %d.", __func__, (int)(n), (int)(params[0] / sizeof(cell))); \
 		return GPS_ERROR_INVALID_PARAMS; \
 	}
 

@@ -1,9 +1,14 @@
-cmake_minimum_required(VERSION 3.5...3.28)
-set(CMAKE_POLICY_VERSION_MINIMUM "3.5" CACHE STRING "Minimum policy version" FORCE)
+cmake_minimum_required(VERSION 3.15...3.28)
+set(CMAKE_POLICY_VERSION_MINIMUM "3.15" CACHE STRING "Minimum policy version" FORCE)
 project(GPS-Plugin-Plus VERSION 2.0.0 LANGUAGES C CXX)
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+if(MSVC)
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
   if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
@@ -19,7 +24,7 @@ if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
   endif()
 endif()
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -Wno-noexcept-type -pthread")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-noexcept-type -pthread")
   if(WIN32)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static")
   endif()
@@ -76,10 +81,12 @@ set(GPS_COMMON_SOURCES
   src/connection.cpp
   src/container.cpp
   src/file.cpp
+  src/logger.cpp
   src/natives.cpp
   src/node.cpp
   src/path.cpp
   src/pathfinder.cpp
+  src/worker_pool.cpp
   src/zones.cpp
   src/tunnels.cpp
   src/radars.cpp
@@ -98,16 +105,20 @@ add_library(GPS-Plugin-Plus MODULE ${GPS_PLUGIN_SOURCES})
 set_target_properties(GPS-Plugin-Plus PROPERTIES PREFIX "")
 set_target_properties(GPS-Plugin-Plus PROPERTIES OUTPUT_NAME "GPS")
 if(MSVC)
-  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  set_property(TARGET GPS-Plugin-Plus PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 elseif(MINGW)
   set_target_properties(GPS-Plugin-Plus PROPERTIES LINK_FLAGS "-static")
 endif()
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+  set_property(TARGET GPS-Plugin-Plus APPEND_STRING PROPERTY COMPILE_FLAGS " -Wall")
+  if(NOT WIN32)
+    set_property(TARGET GPS-Plugin-Plus APPEND_STRING PROPERTY COMPILE_FLAGS " -fvisibility=hidden -fvisibility-inlines-hidden")
+    set_property(TARGET GPS-Plugin-Plus APPEND_STRING PROPERTY LINK_FLAGS " -static-libgcc -static-libstdc++ -Wl,--exclude-libs,ALL")
+    target_link_options(GPS-Plugin-Plus PRIVATE "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/exports_plugin.map")
+  endif()
+endif()
 if(UNIX)
   target_link_libraries(GPS-Plugin-Plus PRIVATE pthread rt)
-endif()
-
-if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
-  set_property(TARGET GPS-Plugin-Plus APPEND_STRING PROPERTY COMPILE_FLAGS " -Wall")
 endif()
 
 # Native open.mp Component Target
@@ -116,19 +127,24 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/lib/open.mp-sdk/CMakeLists.txt")
   add_library(GPS-Component-Plus MODULE ${GPS_COMMON_SOURCES} src/component.cpp)
   target_compile_definitions(GPS-Component-Plus PRIVATE OMP_COMPONENT)
   target_link_libraries(GPS-Component-Plus PRIVATE OMP-SDK)
-  if(WIN32)
-    target_link_libraries(GPS-Component-Plus PRIVATE ws2_32)
-  else()
+  if(NOT WIN32)
     target_link_libraries(GPS-Component-Plus PRIVATE pthread rt)
   endif()
   set_target_properties(GPS-Component-Plus PROPERTIES PREFIX "")
   set_target_properties(GPS-Component-Plus PROPERTIES OUTPUT_NAME "GPS")
   set_target_properties(GPS-Component-Plus PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/components")
   set_target_properties(GPS-Component-Plus PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/components")
-  if(MINGW)
+  if(MSVC)
+    set_property(TARGET GPS-Component-Plus PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  elseif(MINGW)
     set_target_properties(GPS-Component-Plus PROPERTIES LINK_FLAGS "-static")
   endif()
-  if(CMAKE_COMPILER_IS_GNUCC OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
+  if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     set_property(TARGET GPS-Component-Plus APPEND_STRING PROPERTY COMPILE_FLAGS " -Wall")
+    if(NOT WIN32)
+      set_property(TARGET GPS-Component-Plus APPEND_STRING PROPERTY COMPILE_FLAGS " -fvisibility=hidden -fvisibility-inlines-hidden")
+      set_property(TARGET GPS-Component-Plus APPEND_STRING PROPERTY LINK_FLAGS " -static-libgcc -static-libstdc++ -Wl,--exclude-libs,ALL")
+      target_link_options(GPS-Component-Plus PRIVATE "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/exports_component.map")
+    endif()
   endif()
 endif()

@@ -210,12 +210,12 @@ native DestroyPath(Path:pathid);
 ```pawn
 new Path:p;
 FindPath(src, dst, p);
-// Configure path to self-destruct after 45 seconds of inactivity
+// Configure path to self-destruct after 45 seconds (absolute TTL)
 SetPathAutoDestroy(p, 45000);
 ```
 
 ### Persistent Path Storage & Networking
-Save, load, or serialize paths into binary buffers or string representations:
+Save, load, or serialize paths into text files or string representations:
 
 ```pawn
 native SavePathToFile(Path:pathid, const filename[]);

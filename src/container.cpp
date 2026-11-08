@@ -2,8 +2,13 @@
 #include <cmath>
 #include <limits>
 #include <vector>
+#include <queue>
+#include <random>
 #include <algorithm>
 #include <cstdint>
+#include <unordered_set>
+#include <condition_variable>
+#include <chrono>
 
 #include "container.h"
 #include "connection.h"
@@ -18,6 +23,7 @@ namespace Container
 		int highest_connection_id;
 
 		std::unordered_map<int, Node*> nodes;
+		std::vector<Node*> nodes_by_type[3];
 		int highest_node_id;
 		int highest_node_id_by_type[3] = { -1, -1, -1 };
 
@@ -35,23 +41,33 @@ namespace Container
 		std::unordered_map<int, Path*> paths;
 		int highest_path_id;
 
+		// San Andreas interior altitude threshold. Standard GTA:SA exterior map is below 500m Z,
+		// while interior world spaces (e.g. casinos, interiors) are placed at Z >= 500m.
+		constexpr float INTERIOR_ALTITUDE_THRESHOLD = 500.0f;
+
+		// Water / sea level threshold. Nodes at Z <= 1.0f are generally water level / boat nodes.
+		// When searching for ground vehicles/pedestrians at normal terrain (Z > 1.5f), exclude submerged / sea nodes.
+		constexpr float GROUND_SEARCH_MIN_Z = 1.5f;
+		constexpr float WATER_SURFACE_MAX_Z = 1.0f;
+
 		inline bool IsNodeEligible(const Node* node, const float search_z, const PathType type)
 		{
 			const float nz = node->getZ();
-			if (search_z < 500.0f)
+			if (search_z < INTERIOR_ALTITUDE_THRESHOLD)
 			{
-				if (nz >= 500.0f)
+				if (nz >= INTERIOR_ALTITUDE_THRESHOLD)
 				{
 					return false;
 				}
-				if ((type == PATH_TYPE_VEHICLE || type == PATH_TYPE_PEDESTRIAN) && search_z > 1.5f && nz <= 1.0f)
+				const PathType eff_type = (type == PATH_TYPE_ANY) ? node->getType() : type;
+				if ((eff_type == PATH_TYPE_VEHICLE || eff_type == PATH_TYPE_PEDESTRIAN) && search_z > GROUND_SEARCH_MIN_Z && nz <= WATER_SURFACE_MAX_Z)
 				{
 					return false;
 				}
 			}
 			else
 			{
-				if (nz < 500.0f)
+				if (nz < INTERIOR_ALTITUDE_THRESHOLD)
 				{
 					return false;
 				}
@@ -59,31 +75,61 @@ namespace Container
 			return true;
 		}
 
-		std::shared_mutex lock;
+		std::shared_mutex graph_mutex;
+		std::mutex paths_mutex;
+		std::atomic<int> pending_writers{0};
+		std::condition_variable writers_done_cv;
+		std::mutex writers_done_mutex;
 	}
 
-
-	void LockExclusive()
+	std::shared_mutex& GetGraphMutex()
 	{
-		lock.lock();
+		return graph_mutex;
 	}
 
-
-	void UnlockExclusive()
+	std::mutex& GetPathsMutex()
 	{
-		lock.unlock();
+		return paths_mutex;
 	}
 
-
-	void LockShared()
+	void IncrementPendingWriters()
 	{
-		lock.lock_shared();
+		pending_writers.fetch_add(1, std::memory_order_release);
 	}
 
-
-	void UnlockShared()
+	void DecrementPendingWriters()
 	{
-		lock.unlock_shared();
+		pending_writers.fetch_sub(1, std::memory_order_release);
+	}
+
+	bool HasPendingWriters()
+	{
+		return pending_writers.load(std::memory_order_acquire) > 0;
+	}
+
+	void WaitForWritersDone(std::function<bool()> stop_condition)
+	{
+		std::unique_lock<std::mutex> lock(writers_done_mutex);
+		writers_done_cv.wait_for(lock, std::chrono::milliseconds(20), [&]() {
+			return !HasPendingWriters() || (stop_condition && stop_condition());
+		});
+	}
+
+	GraphWriterLock::GraphWriterLock(std::shared_mutex& mtx)
+		: mtx_(mtx)
+	{
+		IncrementPendingWriters();
+		mtx_.lock();
+	}
+
+	GraphWriterLock::~GraphWriterLock()
+	{
+		mtx_.unlock();
+		DecrementPendingWriters();
+		{
+			std::lock_guard<std::mutex> lock(writers_done_mutex);
+			writers_done_cv.notify_all();
+		}
 	}
 
 
@@ -96,7 +142,7 @@ namespace Container
 
 		bool Add(const int id, const float x, const float y, const float z, const PathType type, const uint32_t flags)
 		{
-			if (Find(id) != nullptr)
+			if (FindIncludingPending(id) != nullptr)
 			{
 				return false;
 			}
@@ -113,6 +159,7 @@ namespace Container
 			const int type_idx = static_cast<int>(type);
 			if (type_idx >= 0 && type_idx < 3)
 			{
+				nodes_by_type[type_idx].push_back(new_node);
 				if (id > highest_node_id_by_type[type_idx])
 				{
 					highest_node_id_by_type[type_idx] = id;
@@ -126,7 +173,19 @@ namespace Container
 		{
 			const auto node = nodes.find(id);
 
-			if (node == nodes.end())
+			if (node == nodes.end() || node->second == nullptr || node->second->isSetForDeletion())
+			{
+				return nullptr;
+			}
+
+			return node->second;
+		}
+
+		Node* FindIncludingPending(const int id)
+		{
+			const auto node = nodes.find(id);
+
+			if (node == nodes.end() || node->second == nullptr)
 			{
 				return nullptr;
 			}
@@ -169,7 +228,7 @@ namespace Container
 						{
 							for (Node* node : it->second)
 							{
-								if (node->getID() == ignored_id || node->isSetForDeletion() || node->getType() != type || !IsNodeEligible(node, z, type))
+								if (node->getID() == ignored_id || node->isSetForDeletion() || (type != PATH_TYPE_ANY && node->getType() != type) || !IsNodeEligible(node, z, type))
 								{
 									continue;
 								}
@@ -195,7 +254,7 @@ namespace Container
 				for (const auto& pair : nodes)
 				{
 					Node* node = pair.second;
-					if (node->getID() == ignored_id || node->isSetForDeletion() || node->getType() != type || !IsNodeEligible(node, z, type))
+					if (node->getID() == ignored_id || node->isSetForDeletion() || (type != PATH_TYPE_ANY && node->getType() != type) || !IsNodeEligible(node, z, type))
 					{
 						continue;
 					}
@@ -247,7 +306,8 @@ namespace Container
 				return false;
 			}
 
-			for (auto connection : node->getConnections())
+			const auto conns = node->getConnections();
+			for (auto connection : conns)
 			{
 				Connections::Delete(connection);
 			}
@@ -265,6 +325,13 @@ namespace Container
 			}
 
 			nodes.erase(node->getID());
+
+			const int type_idx = static_cast<int>(node->getType());
+			if (type_idx >= 0 && type_idx < 3)
+			{
+				auto& vec = nodes_by_type[type_idx];
+				vec.erase(std::remove(vec.begin(), vec.end(), node), vec.end());
+			}
 
 			delete node;
 			return true;
@@ -291,6 +358,7 @@ namespace Container
 
 		void SetAreaDangerWeight(const float minx, const float miny, const float maxx, const float maxy, const float weight)
 		{
+			std::shared_lock<std::shared_mutex> lock(graph_mutex);
 			const float x1 = std::min(minx, maxx);
 			const float x2 = std::max(minx, maxx);
 			const float y1 = std::min(miny, maxy);
@@ -311,6 +379,7 @@ namespace Container
 
 		void ResetDangerWeights()
 		{
+			std::shared_lock<std::shared_mutex> lock(graph_mutex);
 			for (auto& pair : nodes)
 			{
 				if (pair.second != nullptr)
@@ -319,11 +388,188 @@ namespace Container
 				}
 			}
 		}
+
+		void RebuildTypeIndices()
+		{
+			for (int i = 0; i < 3; ++i)
+			{
+				nodes_by_type[i].clear();
+			}
+			for (const auto& pair : nodes)
+			{
+				Node* n = pair.second;
+				if (n == nullptr || n->isSetForDeletion()) continue;
+				const int t = static_cast<int>(n->getType());
+				if (t >= 0 && t < 3)
+				{
+					nodes_by_type[t].push_back(n);
+				}
+			}
+		}
+
+		Node* GetRandomNode(PathType type, float min_z, float max_z)
+		{
+			std::shared_lock<std::shared_mutex> lock(graph_mutex);
+			static thread_local std::mt19937 rng{ std::random_device{}() };
+
+			if (type == PATH_TYPE_ANY)
+			{
+				const size_t total = nodes_by_type[0].size() + nodes_by_type[1].size() + nodes_by_type[2].size();
+				if (total == 0) return nullptr;
+
+				std::uniform_int_distribution<size_t> dist(0, total - 1);
+				for (int i = 0; i < 30; ++i)
+				{
+					size_t idx = dist(rng);
+					Node* n = nullptr;
+					if (idx < nodes_by_type[0].size())
+					{
+						n = nodes_by_type[0][idx];
+					}
+					else if (idx < nodes_by_type[0].size() + nodes_by_type[1].size())
+					{
+						n = nodes_by_type[1][idx - nodes_by_type[0].size()];
+					}
+					else
+					{
+						n = nodes_by_type[2][idx - nodes_by_type[0].size() - nodes_by_type[1].size()];
+					}
+
+					if (n != nullptr && !n->isSetForDeletion())
+					{
+						const float z = n->getZ();
+						if (z >= min_z && z <= max_z)
+						{
+							return n;
+						}
+					}
+				}
+
+				Node* chosen = nullptr;
+				size_t count = 0;
+				for (int t = 0; t < 3; ++t)
+				{
+					for (Node* n : nodes_by_type[t])
+					{
+						if (n != nullptr && !n->isSetForDeletion())
+						{
+							const float z = n->getZ();
+							if (z >= min_z && z <= max_z)
+							{
+								++count;
+								std::uniform_int_distribution<size_t> pick(1, count);
+								if (pick(rng) == 1)
+								{
+									chosen = n;
+								}
+							}
+						}
+					}
+				}
+				return chosen;
+			}
+
+			const int type_idx = static_cast<int>(type);
+			if (type_idx < 0 || type_idx >= 3) return nullptr;
+
+			const auto& pool = nodes_by_type[type_idx];
+			if (pool.empty()) return nullptr;
+
+			// Fast trial: try up to 30 random draws in O(1)
+			std::uniform_int_distribution<size_t> dist(0, pool.size() - 1);
+			for (int i = 0; i < 30; ++i)
+			{
+				Node* n = pool[dist(rng)];
+				if (n != nullptr && !n->isSetForDeletion())
+				{
+					const float z = n->getZ();
+					if (z >= min_z && z <= max_z)
+					{
+						return n;
+					}
+				}
+			}
+
+			// Fallback: reservoir sampling over the type pool without allocations
+			Node* chosen = nullptr;
+			size_t count = 0;
+			for (Node* n : pool)
+			{
+				if (n != nullptr && !n->isSetForDeletion())
+				{
+					const float z = n->getZ();
+					if (z >= min_z && z <= max_z)
+					{
+						++count;
+						std::uniform_int_distribution<size_t> pick(1, count);
+						if (pick(rng) == 1)
+						{
+							chosen = n;
+						}
+					}
+				}
+			}
+			return chosen;
+		}
+
+		Node* GetRandomNodeInArea(float min_x, float min_y, float max_x, float max_y, PathType type, float min_z, float max_z)
+		{
+			std::shared_lock<std::shared_mutex> lock(graph_mutex);
+			const float x1 = std::min(min_x, max_x);
+			const float x2 = std::max(min_x, max_x);
+			const float y1 = std::min(min_y, max_y);
+			const float y2 = std::max(min_y, max_y);
+
+			const int cx_min = static_cast<int>(std::floor(x1 / GRID_CELL_SIZE));
+			const int cx_max = static_cast<int>(std::floor(x2 / GRID_CELL_SIZE));
+			const int cy_min = static_cast<int>(std::floor(y1 / GRID_CELL_SIZE));
+			const int cy_max = static_cast<int>(std::floor(y2 / GRID_CELL_SIZE));
+
+			static thread_local std::mt19937 rng{ std::random_device{}() };
+			Node* chosen = nullptr;
+			size_t count = 0;
+
+			for (int cx = cx_min; cx <= cx_max; ++cx)
+			{
+				for (int cy = cy_min; cy <= cy_max; ++cy)
+				{
+					const int64_t key = (static_cast<int64_t>(cx) << 32) | static_cast<uint32_t>(cy);
+					auto it = spatial_grid.find(key);
+					if (it == spatial_grid.end()) continue;
+
+					for (Node* n : it->second)
+					{
+						if (n == nullptr || n->isSetForDeletion() || (type != PATH_TYPE_ANY && n->getType() != type)) continue;
+						const float x = n->getX();
+						const float y = n->getY();
+						const float z = n->getZ();
+						if (x >= x1 && x <= x2 && y >= y1 && y <= y2 && z >= min_z && z <= max_z)
+						{
+							++count;
+							std::uniform_int_distribution<size_t> pick(1, count);
+							if (pick(rng) == 1)
+							{
+								chosen = n;
+							}
+						}
+					}
+				}
+			}
+
+			return chosen;
+		}
 	}
 
 
 	namespace Connections
 	{
+		std::atomic<float> min_traffic_multiplier_{ 1.0f };
+
+		float GetMinTrafficMultiplier()
+		{
+			return min_traffic_multiplier_.load(std::memory_order_relaxed);
+		}
+
 		int Add(const int sourceID, const int targetID, const float road_width, const int left_lanes, const int right_lanes, const bool one_way)
 		{
 			if (sourceID == targetID)
@@ -413,7 +659,7 @@ namespace Container
 					continue;
 				}
 
-				if (a->getType() != type && b->getType() != type)
+				if (type != PATH_TYPE_ANY && a->getType() != type && b->getType() != type)
 				{
 					continue;
 				}
@@ -491,6 +737,11 @@ namespace Container
 			if (conn != nullptr)
 			{
 				conn->setTrafficMultiplier(multiplier);
+				const float clamped = std::max(0.01f, multiplier);
+				float current_min = min_traffic_multiplier_.load(std::memory_order_relaxed);
+				while (clamped < current_min && !min_traffic_multiplier_.compare_exchange_weak(current_min, clamped, std::memory_order_relaxed))
+				{
+				}
 			}
 		}
 
@@ -506,10 +757,17 @@ namespace Container
 
 		void SetAreaTrafficMultiplier(const float minx, const float miny, const float maxx, const float maxy, const float multiplier)
 		{
+			std::shared_lock<std::shared_mutex> lock(graph_mutex);
 			const float x1 = std::min(minx, maxx);
 			const float x2 = std::max(minx, maxx);
 			const float y1 = std::min(miny, maxy);
 			const float y2 = std::max(miny, maxy);
+
+			const float clamped = std::max(0.01f, multiplier);
+			float current_min = min_traffic_multiplier_.load(std::memory_order_relaxed);
+			while (clamped < current_min && !min_traffic_multiplier_.compare_exchange_weak(current_min, clamped, std::memory_order_relaxed))
+			{
+			}
 
 			for (auto& pair : connections)
 			{
@@ -529,6 +787,8 @@ namespace Container
 
 		void ResetTrafficMultipliers()
 		{
+			min_traffic_multiplier_.store(1.0f, std::memory_order_relaxed);
+			std::shared_lock<std::shared_mutex> lock(graph_mutex);
 			for (auto& pair : connections)
 			{
 				if (pair.second != nullptr)
@@ -628,6 +888,7 @@ namespace Container
 
 		void SetAreaMaxHeight(const float minx, const float miny, const float maxx, const float maxy, const float height)
 		{
+			std::shared_lock<std::shared_mutex> lock(graph_mutex);
 			const float x1 = std::min(minx, maxx);
 			const float x2 = std::max(minx, maxx);
 			const float y1 = std::min(miny, maxy);
@@ -653,8 +914,24 @@ namespace Container
 
 	namespace Paths
 	{
+		Path* Register(const std::vector<Node*>& nodes, float length, AMX* owner)
+		{
+			auto path = new Path(length, owner);
+			for (size_t i = 0; i < nodes.size(); ++i)
+			{
+				if (nodes[i] != nullptr)
+				{
+					path->addNodeToEnd(nodes[i]);
+					nodes[i]->addToPath(path, static_cast<int>(i));
+				}
+			}
+			Add(path);
+			return path;
+		}
+
 		int Add(Path* path)
 		{
+			std::lock_guard<std::mutex> lock(paths_mutex);
 			const auto id = highest_path_id++;
 
 			paths[id] = path;
@@ -665,23 +942,50 @@ namespace Container
 
 		void Delete(Path* path)
 		{
+			if (path == nullptr) return;
+
+			{
+				std::lock_guard<std::mutex> lock(paths_mutex);
+				paths.erase(path->getID());
+			}
+
+			std::unordered_set<Node*> unique_nodes;
 			for (auto node : path->getNodes())
 			{
-				node->removeFromPath(path);
-
-				if (node->isSetForDeletion())
+				if (node != nullptr)
 				{
-					Nodes::TryDelete(node);
+					unique_nodes.insert(node);
 				}
 			}
 
-			paths.erase(path->getID());
-
 			delete path;
+
+			bool needs_graph_write = false;
+			for (auto node : unique_nodes)
+			{
+				if (node != nullptr && node->isSetForDeletion())
+				{
+					needs_graph_write = true;
+					break;
+				}
+			}
+
+			if (needs_graph_write)
+			{
+				GraphWriterLock lock(graph_mutex);
+				for (auto node : unique_nodes)
+				{
+					if (node != nullptr && node->isSetForDeletion())
+					{
+						Nodes::TryDelete(node);
+					}
+				}
+			}
 		}
 
 		Path* Find(const int id)
 		{
+			std::lock_guard<std::mutex> lock(paths_mutex);
 			const auto path = paths.find(id);
 
 			if (path == paths.end())
@@ -692,28 +996,90 @@ namespace Container
 			return path->second;
 		}
 
+		Path* FindLocked(const int id)
+		{
+			return Find(id);
+		}
+
 		std::unordered_map<int, Path*> GetAll()
 		{
+			std::lock_guard<std::mutex> lock(paths_mutex);
 			return paths;
 		}
 
 		int GetHighestID()
 		{
+			std::lock_guard<std::mutex> lock(paths_mutex);
 			return highest_path_id;
+		}
+
+		struct PathExpiryEntry
+		{
+			std::chrono::steady_clock::time_point expiry_time;
+			int path_id;
+
+			bool operator>(const PathExpiryEntry& other) const
+			{
+				return expiry_time > other.expiry_time;
+			}
+		};
+
+		std::priority_queue<PathExpiryEntry, std::vector<PathExpiryEntry>, std::greater<PathExpiryEntry>> expiry_queue;
+
+		void RegisterExpiry(const int id, const std::chrono::steady_clock::time_point expiry_time)
+		{
+			std::lock_guard<std::mutex> lock(paths_mutex);
+			expiry_queue.push({ expiry_time, id });
 		}
 
 		void ProcessTick()
 		{
+			const auto now = std::chrono::steady_clock::now();
 			std::vector<Path*> expired_paths;
-			for (auto& pair : paths)
 			{
-				if (pair.second != nullptr && pair.second->isExpired())
+				std::lock_guard<std::mutex> lock(paths_mutex);
+				while (!expiry_queue.empty())
 				{
-					expired_paths.push_back(pair.second);
+					const auto& top = expiry_queue.top();
+					if (top.expiry_time > now)
+					{
+						break;
+					}
+
+					const int id = top.path_id;
+					expiry_queue.pop();
+
+					auto it = paths.find(id);
+					if (it != paths.end() && it->second != nullptr && it->second->isExpired())
+					{
+						expired_paths.push_back(it->second);
+					}
 				}
 			}
 
 			for (auto path : expired_paths)
+			{
+				Delete(path);
+			}
+		}
+
+		void DestroyByOwner(AMX* amx)
+		{
+			if (amx == nullptr) return;
+
+			std::vector<Path*> to_destroy;
+			{
+				std::lock_guard<std::mutex> lock(paths_mutex);
+				for (auto& pair : paths)
+				{
+					if (pair.second != nullptr && pair.second->getOwnerAmx() == amx)
+					{
+						to_destroy.push_back(pair.second);
+					}
+				}
+			}
+
+			for (auto path : to_destroy)
 			{
 				Delete(path);
 			}

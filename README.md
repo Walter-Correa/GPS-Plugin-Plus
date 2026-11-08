@@ -6,10 +6,10 @@
 
 **GPS Plugin Plus** is a high-performance, multi-threaded pathfinding, real-time navigation, autonomous NPC vehicle steering, and spatial analysis suite engineered specifically for **San Andreas Multiplayer (SA-MP)** and **open.mp**.
 
-It empowers Pawn developers to build intelligent, state-of-the-art navigation systems: **Threaded A\* Route Calculations**, **Real-Time Turn-by-Turn Maneuvers**, **Catmull-Rom Spline Curve Smoothing**, **Douglas-Peucker Route Decimation**, **Autonomous Pure Pursuit Bot Steering**, **High-Speed Police Intercept Vectors**, **Dynamic Traffic Jams & Roadblocks**, **Waze-Style Speed Radars**, and **Nearest Service Queries by Real Road Distance**—all operating with zero server tick lag and 100% backward compatibility.
+It empowers Pawn developers to build intelligent, state-of-the-art navigation systems: **Threaded A\* Route Calculations**, **Real-Time Turn-by-Turn Maneuvers**, **Catmull-Rom Spline Curve Smoothing**, **Douglas-Peucker Route Decimation**, **Autonomous Pure Pursuit Bot Steering**, **High-Speed Police Intercept Vectors**, **Dynamic Traffic Jams & Roadblocks**, **Waze-Style Speed Radars**, and **Nearest Service Queries by Real Road Distance**—with full asynchronous worker thread support (zero server tick lag on threaded queries) and drop-in compatibility.
 
 > [!NOTE]
-> This project is conceptually inspired by [@AmyrAhmady](https://github.com/AmyrAhmady)'s original [samp-gps-plugin](https://github.com/AmyrAhmady/samp-gps-plugin). It has been completely re-architected and modernized from the ground up, introducing dual-stack architecture (native open.mp Component + SA-MP Plugin), a native multi-threaded C++ worker pool, PawnPlus task async coroutines, multi-modal routing (vehicles, pedestrians, boats), and 105+ high-performance spatial natives.
+> This project is conceptually inspired by the original [samp-gps-plugin](https://github.com/kristoisberg/samp-gps-plugin) by [@kristoisberg](https://github.com/kristoisberg) and its fork by [@AmyrAhmady](https://github.com/AmyrAhmady). It has been completely re-architected and modernized from the ground up, introducing dual-stack architecture (native open.mp Component + SA-MP Plugin), a native multi-threaded C++ worker pool, PawnPlus task async coroutines, multi-modal routing (vehicles, pedestrians, boats), and 105+ high-performance spatial natives.
 
 ---
 
@@ -18,7 +18,7 @@ It empowers Pawn developers to build intelligent, state-of-the-art navigation sy
 | Feature / Capability | Legacy GPS Plugin (Amyr Ahmady) | GPS Plugin Plus |
 | :--- | :--- | :--- |
 | **Platform Architecture** | SA-MP plugin wrapper only | ✅ Native open.mp Component (`GPS-Component-Plus`) + SA-MP Plugin (`GPS-Plugin-Plus`) |
-| **Asynchronous Engine** | Tick-blocking synchronous execution or basic thread | ✅ Multi-threaded C++ worker pool + PawnPlus task promises (`await FindPathAsync`) |
+| **Asynchronous Engine** | Tick-blocking synchronous execution or basic thread | ✅ Multi-threaded C++ worker pool + PawnPlus task promises (`task_await(FindPathAsync)` / `await`) |
 | **Transport Modalities** | Vehicles only | ✅ Unified multi-modal routing (`PathType`): Vehicles, Pedestrians, and Boats |
 | **Route Preferences** | Distance only | ✅ 8 heuristics: Shortest, Highway, Avoid Highway, Safest, Eco, Evasive, Toll-Free, Paved Only |
 | **Turn-by-Turn Navigation** | ❌ None | ✅ Built-in tracker (`GetPathProgress`, `GetPathNextManeuver`) with 7 turn directions & distance |
@@ -33,7 +33,7 @@ It empowers Pawn developers to build intelligent, state-of-the-art navigation sy
 | **Roadside Snapping & Alignment** | Snaps to road center | ✅ **Curb-side alignment** (`GetRoadPositionInfo`) for parked vehicles and mechanic missions |
 | **Speed Radars & Hazard Alerts** | ❌ None | ✅ Waze-style road radar detector (`RegisterRoadRadar`, `GetNextPathRadar`) |
 | **Vehicle Physical Limits** | ❌ None | ✅ Bridge clearance limits (`SetConnectionMaxHeight`) & vehicle categories (`VehicleCategory`) |
-| **Memory & Serialization** | Manual deletion only | ✅ Automatic TTL garbage collection (`SetPathAutoDestroy`) and binary buffer import/export |
+| **Memory & Serialization** | Manual deletion only | ✅ Automatic TTL garbage collection (`SetPathAutoDestroy`) and plain-text path file/string import/export |
 
 ---
 
@@ -72,17 +72,30 @@ Place the binaries, database, and include header into your server development en
 
 ### 2. Server Configuration
 
+Install **either** the SA-MP plugin in `plugins/` **or** the open.mp component in `components/` (do not install both simultaneously).
+
 * **SA-MP (`server.cfg`):**
+  Windows:
   ```cfg
-  plugins GPS.dll   # Windows
-  plugins GPS.so    # Linux
+  plugins GPS.dll
   ```
+  Linux:
+  ```cfg
+  plugins GPS.so
+  ```
+
 * **open.mp (`config.json`):**
-  ```json
-  {
-    "components": ["GPS"]
-  }
-  ```
+  * **Option A: Native open.mp Component (Recommended):**
+    Place `GPS.dll` (or `GPS.so`) into your server's `components/` directory. Open.mp automatically detects and loads all components in `components/`; no entry in `config.json` is required.
+  * **Option B: Legacy Plugin Mode:**
+    Place `GPS.dll` (or `GPS.so`) into `plugins/` and add it to `config.json`:
+    ```json
+    {
+      "pawn": {
+        "legacy_plugins": ["GPS"]
+      }
+    }
+    ```
 
 ### 3. Include in Your Script
 
@@ -131,7 +144,7 @@ public OnPlayerRouteReady(Path:path, playerid)
     format(msg, sizeof(msg), "[GPS] Route calculated! Distance: %.1f km | ETA: %.1f minutes", dist / 1000.0, eta / 60.0);
     SendClientMessage(playerid, 0x2ECC71AA, msg);
 
-    // Auto-destroy path from memory after 5 minutes of inactivity
+    // Auto-destroy path from memory after 5 minutes (absolute TTL)
     SetPathAutoDestroy(path, 300000);
     return 1;
 }
@@ -168,9 +181,10 @@ All 105 native functions, callbacks, style enumerations, and constants are exhau
 ## Building from Source
 
 ### Prerequisites
-* CMake 3.16+
+* CMake 3.15+
 * Visual Studio 2022 (Windows) with Desktop C++ workload
 * GCC / G++ 9+ with 32-bit multilib (`gcc-multilib g++-multilib`) (Linux)
+* Git submodules: clone with `--recursive` or run `git submodule update --init --recursive` to fetch `open.mp-sdk` (required for building the open.mp component).
 
 ### Compiling on Windows (1-Click Script)
 Run the provided automated build script:
@@ -193,23 +207,23 @@ make -j$(nproc)
 <details>
 <summary>Show the version history</summary>
 
-### 2.0.0 — 31/10/2026
+### 2.0.0 — 08/11/2026
 - Complete architectural evolution to **GPS Plugin Plus**:
   - Native **open.mp Component SDK** integration with dual-target compilation (legacy SA-MP plugin and modern open.mp component).
-  - High-performance **2D spatial hash grid** indexing ($100\text{m} \times 100\text{m}$ cells), reducing spatial node/connection queries from $\mathcal{O}(N)$ linear scans to $\mathcal{O}(1)$ constant-time neighborhood lookups (< 20 nanoseconds per query).
+  - High-performance **2D spatial hash grid** indexing ($100\text{m} \times 100\text{m}$ cells), reducing spatial node/connection queries from $\mathcal{O}(N)$ linear scans to $\mathcal{O}(1)$ constant-time neighborhood lookups (sub-millisecond spatial lookups and microsecond-level closest point queries).
   - Advanced **orthogonal road snapping & curb positioning**: `GetRoadPositionInfo`, `GetClosestPointOnRoad`, and `IsPointAgainstTraffic`.
   - Comprehensive **turn-by-turn navigation engine**: `GetPathTurnDirection`, `GetPathNextManeuver`, `GetPathProgress`, and `GetPathRemainingInfo`.
   - Dynamic **roadblocks & layer isolation**: `SetMapNodeBlocked`, `SetConnectionBlocked`, and traffic rerouting.
   - Multi-stop **waypoint routing & highway preference**: `FindMultiStopPath` and `RoutePreference` weighting (`ROUTE_PREF_SHORTEST`, `ROUTE_PREF_HIGHWAYS`, `ROUTE_PREF_AVOID_HIGHWAYS`, `ROUTE_PREF_SAFEST`, `ROUTE_PREF_ECO`, `ROUTE_PREF_EVASIVE`, `ROUTE_PREF_AVOID_TOLLS`, `ROUTE_PREF_PAVED_ONLY`).
-  - Route decimation and waypoint optimization via **Ramer-Douglas-Peucker algorithm** (`GetSimplifiedPathNodes`), reducing checkpoint bandwidth by up to 90%.
+  - Route decimation and waypoint optimization via **iterative Ramer-Douglas-Peucker algorithm** (`GetSimplifiedPathNodes`), using an explicit stack to eliminate recursion overhead and reduce checkpoint bandwidth by up to 90%.
   - Real-time **traffic routing & vehicle category constraints**: `SetConnectionTrafficMultiplier`, `FindPathForVehicleCat`.
-  - High-speed **pursuit interception & Pure Pursuit controller**: `FindInterceptPath` and `GetPurePursuitSteering`.
+  - High-speed **pursuit interception & Pure Pursuit controller**: `FindInterceptPath` and `GetPurePursuitSteering` with SA-MP standard angle convention.
   - Reachability **isochrones & geographic zone dictionary**: `GetReachableMapNodes`, `GetPointZoneName`, and `GetPathZonesSummary`.
   - **Eco-routing & slope elevation climb analysis**: `FindEcoPath` and `GetPathElevationStats`.
   - **Subterranean & tunnel detection**: `RegisterTunnelArea`, `IsPointInTunnel`, `IsMapNodeUnderground`, and `GetPathTunnelSegments`.
-  - Non-Euclidean **nearest service by real road distance**: `FindNearestPointByRoad`.
+  - Non-Euclidean **nearest service by real road distance**: `FindNearestPointByRoad` with optional path handle instantiation to prevent memory leaks when paths are unneeded.
   - Waze-style **speed cameras & road hazard alerts**: `RegisterRoadRadar`, `GetNextPathRadar`.
-  - Tactical **convoy formations & escort offsets**: `GetPathOffsetPosition`.
+  - Tactical **convoy formations & escort offsets**: `GetPathOffsetPosition` with normalized bearing calculations.
   - Tactical **pursuit evasion & anti-dead-end routing**: `FindEvasivePath` and `IsMapNodeDeadEnd`.
   - **Toll roads & bridge restrictions**: `SetConnectionToll`, `GetConnectionToll`, and `FindPathAvoidTolls`.
   - **Roundabout & rotary exit detection**: `GetPathRoundaboutInfo`.
@@ -219,6 +233,17 @@ make -j$(nproc)
   - **Delta re-routing & divergence detection**: `GetPathRejoinPoint`.
   - **Vehicle height clearance & low-bridge avoidance**: `SetConnectionMaxHeight`, `SetAreaMaxHeight`, and `FindPathWithHeightLimit`.
   - **Path memory management & serialization**: `SetPathAutoDestroy`, `SavePathToFile`, `LoadPathFromFile`, `ExportPathToString`, and `ImportPathFromString`.
+  - **Concurrency & Stability Hardening**:
+    - Dedicated worker thread pool with bounded concurrency (`gps_worker_threads`, clamped between 1 and 16) and graceful shutdown synchronization, preventing thread exhaustion.
+    - Strict RAII reader-writer synchronization (`std::shared_mutex`), preventing data races between concurrent pathfinders and main-thread map mutations.
+    - Zero-copy internal vector references across high-frequency natives (`GetMapNodeConnection`, `GetPathNode`, `GetPathLaneNodePos`, `GetPathTurnDirection`, `GetPathZonesSummary`).
+    - String output bounds validation and memory-safe buffer copying (`PawnUtils::GetArray`) in `GetPointZoneName`, `GetMapNodeZoneName`, and `ExportPathToString`.
+    - Initialized configuration reader fallback values preventing undefined behavior.
+    - Full exception safety boundary wrapping all C native entry points and AMX callbacks.
+    - AMX script-level path ownership: paths are tracked per AMX instance and automatically reclaimed on gamemode or filterscript unload.
+    - Admissible A* heuristic scaling ($\frac{h}{\max v}$) guaranteeing mathematically optimal shortest routes across all vehicle and preference weightings.
+    - Strict input bounds validation and path traversal sanitization (`scriptfiles/` sandbox).
+    - Fully static C/C++ runtime (`/MT`) for MSVC (zero external runtime dependencies) and static libgcc/libstdc++ targeting GLIBC 2.28+ for Linux.
   - Full asynchronous support for **PawnPlus tasks** with `PathType` and `RoutePreference`.
   - Comprehensive 6-guide documentation suite in `docs/`.
   - Formal adoption of the **Mozilla Public License 2.0 (MPL-2.0)** and standalone build packages.
@@ -257,8 +282,8 @@ make -j$(nproc)
 
 ## Author & Credits
 
-* [@Walter-Correa](https://github.com/Walter-Correa) - Concept and development of **GPS Plugin Plus**, with the assistance of **Artificial Intelligence**.
-* [@AmyrAhmady](https://github.com/AmyrAhmady) - Predecessor and maintainer of the `samp-gps-plugin` fork that served as the base for this project.
+* [@Walter-Correa](https://github.com/Walter-Correa) - Architecture and implementation of **GPS Plugin Plus**, with the assistance of **Artificial Intelligence**.
+* [@AmyrAhmady](https://github.com/AmyrAhmady) - Predecessor and maintainer of early forks of `samp-gps-plugin`.
 * [@kristoisberg](https://github.com/kristoisberg) - Original creator and architect of `samp-gps-plugin`.
 * [@FreddieCrew](https://github.com/FreddieCrew) - Map node and spatial algorithm contributions.
 * [@Southclaws](https://github.com/Southclaws), [@IllidanS4](https://github.com/IllidanS4), and [@Hual](https://github.com/Hual) - Invaluable architectural insights, community tooling, and PawnPlus integration.

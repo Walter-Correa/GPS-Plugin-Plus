@@ -1,11 +1,25 @@
 #include "path.h"
 
 
-Path::Path(const float length)
+Path::Path(const float length, AMX* owner)
 {
 	id_ = INVALID_PATH_ID;
 	length_ = length;
 	has_ttl_ = false;
+	owner_amx_ = owner;
+}
+
+
+Path::~Path()
+{
+	for (auto node : nodes_)
+	{
+		if (node != nullptr)
+		{
+			node->removeFromPath(this);
+		}
+	}
+	nodes_.clear();
 }
 
 
@@ -23,7 +37,7 @@ void Path::setID(const int id)
 
 void Path::addNodeToStart(Node* node)
 {
-	nodes_.push_front(node);
+	nodes_.insert(nodes_.begin(), node);
 }
 
 
@@ -45,7 +59,7 @@ void Path::setLength(const float length)
 }
 
 
-std::deque<Node*> Path::getNodes() const
+const std::vector<Node*>& Path::getNodes() const
 {
 	return nodes_;
 }
@@ -72,4 +86,22 @@ bool Path::isExpired() const
 		return false;
 	}
 	return std::chrono::steady_clock::now() >= expiry_time_;
+}
+
+
+std::chrono::steady_clock::time_point Path::getExpiryTime() const
+{
+	return expiry_time_;
+}
+
+
+AMX* Path::getOwnerAmx() const
+{
+	return owner_amx_;
+}
+
+
+void Path::setOwnerAmx(AMX* amx)
+{
+	owner_amx_ = amx;
 }
