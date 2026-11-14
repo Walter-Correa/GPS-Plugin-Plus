@@ -8,9 +8,9 @@
 #define _gps_included
 
 #define GPS_PLUGIN_VERSION_MAJOR        2
-#define GPS_PLUGIN_VERSION_MINOR        0
+#define GPS_PLUGIN_VERSION_MINOR        1
 #define GPS_PLUGIN_VERSION_PATCH        0
-#define GPS_PLUGIN_VERSION_STRING       "2.0.0"
+#define GPS_PLUGIN_VERSION_STRING       "2.1.0"
 
 
 const MapNode:GPS_INVALID_MAP_NODE_ID = MapNode:-1;
