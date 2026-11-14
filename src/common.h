@@ -16,6 +16,14 @@ const int INVALID_PATH_ID = -1;
 #endif
 const int INVALID_CONNECTION_ID = -1;
 
+constexpr float GTA_LANE_WIDTH = 5.4f;
+constexpr float WRONG_WAY_PENALTY = 25.0f;
+constexpr float CURVE_MAX_LATERAL_ACCEL = 5.2f;
+constexpr float CURVE_MAX_BRAKE_DECEL = 4.4f;
+constexpr float CURVE_MIN_SPEED_KMH = 25.0f;
+constexpr float CURVE_ARC_WINDOW = 12.0f;
+constexpr float PATH_ETA_ACCEL = 2.8f;
+
 
 enum PathType : int8_t
 {

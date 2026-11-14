@@ -52,12 +52,14 @@ namespace Natives
 	cell AMX_NATIVE_CALL GetConnectionLaneInfo(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL GetConnectionLanePos(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL IsConnectionOneWay(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL IsConnectionWrongWay(AMX* amx, cell* params);
 
 	cell AMX_NATIVE_CALL GetDistanceBetweenMapNodes(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL GetAngleBetweenMapNodes(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL GetMapNodeDistanceFromPoint(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL GetMapNodeAngleFromPoint(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL GetClosestMapNodeToPoint(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetClosestMapNodeToPointAngle(AMX* amx, cell* params);
 
 	cell AMX_NATIVE_CALL GetHighestMapNodeID(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL GetRandomMapNode(AMX* amx, cell* params);
@@ -172,6 +174,14 @@ namespace Natives
 	cell AMX_NATIVE_CALL GetConnectionMaxHeight(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL SetAreaMaxHeight(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL FindPathWithHeightLimit(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL GetPathLaneTarget(AMX* amx, cell* params);
+
+	cell AMX_NATIVE_CALL FindPathToPoint(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL IsPathStopReached(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetPathSpeedAdvice(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetPathRoadProfile(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL GetPathTimeEstimate(AMX* amx, cell* params);
 }
 
 extern AMX_NATIVE_INFO PluginNatives[];

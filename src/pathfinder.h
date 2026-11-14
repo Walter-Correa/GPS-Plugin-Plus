@@ -12,7 +12,7 @@ struct PathfinderYieldException : public std::exception
 
 namespace Pathfinder
 {
-	bool FindPathNodes(Node* start, Node* target, std::vector<Node*>& out_nodes, float& out_length, PathType type = PATH_TYPE_VEHICLE, RoutePreference pref = ROUTE_PREF_SHORTEST, VehicleCategory cat = VEHICLE_CAT_STANDARD, float danger_penalty = 0.0f, float max_slope_gradient = 0.0f, bool avoid_tolls = false, bool evasive = false, float vehicle_height = 0.0f, bool allow_yield = true);
+	bool FindPathNodes(Node* start, Node* target, std::vector<Node*>& out_nodes, float& out_length, PathType type = PATH_TYPE_VEHICLE, RoutePreference pref = ROUTE_PREF_SHORTEST, VehicleCategory cat = VEHICLE_CAT_STANDARD, float danger_penalty = 0.0f, float max_slope_gradient = 0.0f, bool avoid_tolls = false, bool evasive = false, float vehicle_height = 0.0f, bool allow_yield = true, const Connection* forbidden_edge = nullptr);
 	Path* FindPathInternal(Node* start, Node* target, PathType type = PATH_TYPE_VEHICLE, RoutePreference pref = ROUTE_PREF_SHORTEST, VehicleCategory cat = VEHICLE_CAT_STANDARD, float danger_penalty = 0.0f, float max_slope_gradient = 0.0f, bool avoid_tolls = false, bool evasive = false, float vehicle_height = 0.0f);
 	int FindPath(Node* start, Node* target, PathType type = PATH_TYPE_VEHICLE, RoutePreference pref = ROUTE_PREF_SHORTEST, VehicleCategory cat = VEHICLE_CAT_STANDARD, AMX* amx = nullptr);
 	Path* FindMultiStopPathInternal(const std::vector<Node*>& stops, bool optimize_order, PathType type = PATH_TYPE_VEHICLE, RoutePreference pref = ROUTE_PREF_SHORTEST);

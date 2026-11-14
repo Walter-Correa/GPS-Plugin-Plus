@@ -272,3 +272,27 @@ GetPathOffsetPosition(vip_path, current_dist - 15.0, 3.5, escort_x, escort_y, es
 SetVehiclePos(escort_vehicle, escort_x, escort_y, escort_z);
 SetVehicleZAngle(escort_vehicle, escort_angle);
 ```
+
+---
+
+## 9. Point-Projected Routing & Longitudinal Road Profile
+
+When routing to an arbitrary world coordinate (such as a map click inside a plaza or park rather than on a road centerline), `FindPathToPoint` avoids disconnected road islands and intersection overshoots:
+
+```pawn
+new Path:route, Float:sx, Float:sy, Float:sz, Float:road_dist;
+if (FindPathToPoint(start_node, dest_x, dest_y, dest_z, route, sx, sy, sz, road_dist) == GPS_ERROR_NONE)
+{
+    if (road_dist > 25.0)
+    {
+        SendClientMessage(playerid, -1, "Destination is off-road; route terminates at the nearest roadside point.");
+    }
+}
+```
+
+For multi-level roadways (overpasses, bridges, tunnels), `GetPathRoadProfile` interpolates road Z and upcoming slope (`grade_ahead`) directly from the connected node elevations instead of relying on surface heightmaps:
+
+```pawn
+new Float:road_z, Float:grade_ahead;
+GetPathRoadProfile(route, path_idx, vx, vy, 15.0, road_z, grade_ahead);
+```

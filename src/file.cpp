@@ -113,7 +113,7 @@ namespace File
 					input >> left_lanes >> right_lanes >> oneway;
 				}
 
-				if (direction != 2 && Container::Connections::Add(id, id2, road_width, left_lanes, right_lanes, oneway != 0))
+				if (direction != 2 && !Container::Connections::Exists(id, id2) && Container::Connections::Add(id, id2, road_width, left_lanes, right_lanes, oneway != 0))
 				{
 					connection_count++;
 				}

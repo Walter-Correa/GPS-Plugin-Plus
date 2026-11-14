@@ -27,6 +27,10 @@ namespace Container
 		int highest_node_id;
 		int highest_node_id_by_type[3] = { -1, -1, -1 };
 
+		std::mutex comp_mutex;
+		bool comp_dirty[4] = { true, true, true, true };
+		std::unordered_map<int, int> comp_ids[4];
+
 		constexpr float GRID_CELL_SIZE = 100.0f;
 
 		inline int64_t GetGridKey(const float x, const float y)
@@ -85,11 +89,6 @@ namespace Container
 	std::shared_mutex& GetGraphMutex()
 	{
 		return graph_mutex;
-	}
-
-	std::mutex& GetPathsMutex()
-	{
-		return paths_mutex;
 	}
 
 	void IncrementPendingWriters()
@@ -166,6 +165,7 @@ namespace Container
 				}
 			}
 
+			MarkComponentsDirty();
 			return true;
 		}
 
@@ -275,6 +275,87 @@ namespace Container
 			return best_node;
 		}
 
+		Node* FindClosestWithAngle(const float x, const float y, const float z, const float angle, const float max_dist, const PathType type)
+		{
+			const float radius = (max_dist > 0.0f) ? max_dist : 0.0f;
+			if (radius > 0.0f)
+			{
+				const float max_dist_sq = radius * radius;
+				const int cell_radius = std::max(1, static_cast<int>(std::ceil(radius / GRID_CELL_SIZE)));
+				const int cx = static_cast<int>(std::floor(x / GRID_CELL_SIZE));
+				const int cy = static_cast<int>(std::floor(y / GRID_CELL_SIZE));
+
+				auto angle_delta = [](float a, float b)
+				{
+					float diff = std::abs(a - b);
+					while (diff > 180.0f) diff = std::abs(diff - 360.0f);
+					return diff;
+				};
+
+				Node* best_aligned = nullptr;
+				float best_dist_sq = std::numeric_limits<float>::infinity();
+
+				for (int dx = -cell_radius; dx <= cell_radius; ++dx)
+				{
+					for (int dy = -cell_radius; dy <= cell_radius; ++dy)
+					{
+						const int64_t key = (static_cast<int64_t>(cx + dx) << 32) | static_cast<uint32_t>(cy + dy);
+						const auto it = spatial_grid.find(key);
+						if (it == spatial_grid.end()) continue;
+
+						for (Node* node : it->second)
+						{
+							if (node == nullptr || node->isSetForDeletion() || node->isBlocked() || (type != PATH_TYPE_ANY && node->getType() != type) || !IsNodeEligible(node, z, type))
+							{
+								continue;
+							}
+
+							const float nx = node->getX() - x;
+							const float ny = node->getY() - y;
+							const float nz = node->getZ() - z;
+							const float d_sq = nx * nx + ny * ny + nz * nz;
+							if (d_sq > max_dist_sq || d_sq >= best_dist_sq)
+							{
+								continue;
+							}
+
+							bool has_aligned_legal_out = false;
+							for (auto conn : node->getConnections())
+							{
+								if (conn == nullptr || conn->isBlocked() || conn->isWrongWay() || conn->getSource() != node)
+								{
+									continue;
+								}
+								Node* tgt = conn->getTarget();
+								if (tgt == nullptr || tgt == node || tgt->isSetForDeletion() || tgt->isBlocked() || (type != PATH_TYPE_ANY && tgt->getType() != type))
+								{
+									continue;
+								}
+								if (angle_delta(angle, node->getAngleFromNode(tgt, true)) <= 90.0f)
+								{
+									has_aligned_legal_out = true;
+									break;
+								}
+							}
+
+							if (has_aligned_legal_out)
+							{
+								best_dist_sq = d_sq;
+								best_aligned = node;
+							}
+						}
+					}
+				}
+
+				if (best_aligned != nullptr)
+				{
+					return best_aligned;
+				}
+			}
+
+			return FindClosest(x, y, z, type, -1);
+		}
+
 		const std::unordered_map<int, Node*>& GetAll()
 		{
 			return nodes;
@@ -334,6 +415,7 @@ namespace Container
 			}
 
 			delete node;
+			MarkComponentsDirty();
 			return true;
 		}
 
@@ -389,6 +471,96 @@ namespace Container
 			}
 		}
 
+		static int ComponentSlotFromType(const PathType type)
+		{
+			const int idx = static_cast<int>(type);
+			return (idx >= 0 && idx < 3) ? idx : 3;
+		}
+
+		static void BuildComponentsLocked(const int slot, const PathType type)
+		{
+			comp_ids[slot].clear();
+			comp_ids[slot].reserve(nodes.size());
+
+			int next_comp = 1;
+			std::queue<Node*> bfs_queue;
+
+			for (const auto& pair : nodes)
+			{
+				Node* start = pair.second;
+				if (start == nullptr || start->isSetForDeletion() || start->isBlocked())
+				{
+					continue;
+				}
+				if (type != PATH_TYPE_ANY && start->getType() != type)
+				{
+					continue;
+				}
+				if (comp_ids[slot].find(start->getID()) != comp_ids[slot].end())
+				{
+					continue;
+				}
+
+				const int comp_id = next_comp++;
+				comp_ids[slot][start->getID()] = comp_id;
+				bfs_queue.push(start);
+
+				while (!bfs_queue.empty())
+				{
+					Node* curr = bfs_queue.front();
+					bfs_queue.pop();
+
+					for (Connection* conn : curr->getConnections())
+					{
+						if (conn == nullptr || conn->isBlocked())
+						{
+							continue;
+						}
+						Node* other = (conn->getSource() == curr) ? conn->getTarget() : conn->getSource();
+						if (other == nullptr || other->isSetForDeletion() || other->isBlocked())
+						{
+							continue;
+						}
+						if (type != PATH_TYPE_ANY && other->getType() != type)
+						{
+							continue;
+						}
+						if (comp_ids[slot].emplace(other->getID(), comp_id).second)
+						{
+							bfs_queue.push(other);
+						}
+					}
+				}
+			}
+
+			comp_dirty[slot] = false;
+		}
+
+		void MarkComponentsDirty()
+		{
+			std::lock_guard<std::mutex> lock(comp_mutex);
+			for (bool& dirty : comp_dirty)
+			{
+				dirty = true;
+			}
+		}
+
+		int GetConnectedComponent(Node* node, const PathType type)
+		{
+			if (node == nullptr || node->isSetForDeletion() || node->isBlocked())
+			{
+				return -1;
+			}
+			const int slot = ComponentSlotFromType(type);
+			std::lock_guard<std::mutex> lock(comp_mutex);
+			if (comp_dirty[slot])
+			{
+				BuildComponentsLocked(slot, type);
+			}
+			const auto it = comp_ids[slot].find(node->getID());
+			return (it != comp_ids[slot].end()) ? it->second : -1;
+		}
+
 		void RebuildTypeIndices()
 		{
 			for (int i = 0; i < 3; ++i)
@@ -405,6 +577,7 @@ namespace Container
 					nodes_by_type[t].push_back(n);
 				}
 			}
+			MarkComponentsDirty();
 		}
 
 		Node* GetRandomNode(PathType type, float min_z, float max_z)
@@ -570,6 +743,24 @@ namespace Container
 			return min_traffic_multiplier_.load(std::memory_order_relaxed);
 		}
 
+		bool Exists(const int sourceID, const int targetID)
+		{
+			const auto source = Nodes::Find(sourceID);
+			const auto target = Nodes::Find(targetID);
+			if (source == nullptr || target == nullptr)
+			{
+				return false;
+			}
+			for (const auto conn : source->getConnections())
+			{
+				if (conn != nullptr && conn->getSource() == source && conn->getTarget() == target)
+				{
+					return true;
+				}
+			}
+			return false;
+		}
+
 		int Add(const int sourceID, const int targetID, const float road_width, const int left_lanes, const int right_lanes, const bool one_way)
 		{
 			if (sourceID == targetID)
@@ -599,6 +790,7 @@ namespace Container
 			source->addConnection(connection);
 			target->addConnection(connection);
 
+			Nodes::MarkComponentsDirty();
 			return id;
 		}
 
@@ -610,6 +802,7 @@ namespace Container
 			connections.erase(connection->getId());
 
 			delete connection;
+			Nodes::MarkComponentsDirty();
 		}
 
 		Connection* Find(const int id)
@@ -624,86 +817,163 @@ namespace Container
 			return connection->second;
 		}
 
-		bool FindClosestRoadPoint(const float x, const float y, const float z, float& out_x, float& out_y, float& out_z, float& out_angle, float& out_road_width, int& out_conn_id, const PathType type)
+		static bool ProjectPointOnConnection(const float x, const float y, const Connection* conn, float& out_qx, float& out_qy, float& out_qz, float& out_dist_sq)
 		{
-			Node* closest_node = Nodes::FindClosest(x, y, z, type, -1);
-			if (closest_node == nullptr)
+			if (conn == nullptr)
+			{
+				return false;
+			}
+			const Node* a = conn->getSource();
+			const Node* b = conn->getTarget();
+			if (a == nullptr || b == nullptr)
 			{
 				return false;
 			}
 
-			std::vector<Connection*> candidate_conns = closest_node->getConnections();
-			for (auto conn : closest_node->getConnections())
+			const float ax = a->getX(), ay = a->getY(), az = a->getZ();
+			const float bx = b->getX(), by = b->getY(), bz = b->getZ();
+			const float vx = bx - ax;
+			const float vy = by - ay;
+			const float len_sq = vx * vx + vy * vy;
+			if (len_sq < 0.0001f)
 			{
-				Node* neighbor = (conn->getSource() == closest_node) ? conn->getTarget() : conn->getSource();
-				if (neighbor != nullptr)
+				return false;
+			}
+
+			const float apx = x - ax;
+			const float apy = y - ay;
+			float t = (apx * vx + apy * vy) / len_sq;
+			if (t < 0.0f) t = 0.0f;
+			else if (t > 1.0f) t = 1.0f;
+
+			out_qx = ax + t * vx;
+			out_qy = ay + t * vy;
+			out_qz = az + t * (bz - az);
+
+			const float dx = x - out_qx;
+			const float dy = y - out_qy;
+			out_dist_sq = dx * dx + dy * dy;
+			return true;
+		}
+
+		static void CollectConnectionsInRadius(const float x, const float y, const float z, const float radius, const PathType type, std::vector<Connection*>& out_conns)
+		{
+			const float r_sq = radius * radius;
+			const int cell_radius = std::max(1, static_cast<int>(std::ceil(radius / GRID_CELL_SIZE)));
+			const int cx = static_cast<int>(std::floor(x / GRID_CELL_SIZE));
+			const int cy = static_cast<int>(std::floor(y / GRID_CELL_SIZE));
+
+			std::unordered_set<Connection*> seen_conns;
+			for (int dx = -cell_radius; dx <= cell_radius; ++dx)
+			{
+				for (int dy = -cell_radius; dy <= cell_radius; ++dy)
 				{
-					for (auto n_conn : neighbor->getConnections())
+					const int64_t key = (static_cast<int64_t>(cx + dx) << 32) | static_cast<uint32_t>(cy + dy);
+					const auto it = spatial_grid.find(key);
+					if (it == spatial_grid.end()) continue;
+
+					for (Node* node : it->second)
 					{
-						candidate_conns.push_back(n_conn);
+						if (node == nullptr || node->isSetForDeletion() || (type != PATH_TYPE_ANY && node->getType() != type) || !IsNodeEligible(node, z, type))
+						{
+							continue;
+						}
+						const float nx = node->getX() - x;
+						const float ny = node->getY() - y;
+						if ((nx * nx + ny * ny) > r_sq)
+						{
+							continue;
+						}
+						for (auto conn : node->getConnections())
+						{
+							if (conn != nullptr && seen_conns.insert(conn).second)
+							{
+								out_conns.push_back(conn);
+							}
+						}
 					}
 				}
 			}
+		}
+
+		bool FindClosestRoadPoint(const float x, const float y, const float z, float& out_x, float& out_y, float& out_z, float& out_angle, float& out_road_width, int& out_conn_id, const PathType type)
+		{
+			auto evaluate_candidates = [&](const std::vector<Connection*>& candidates, Connection*& best_conn, float& best_dist_sq, float& best_qx, float& best_qy, float& best_qz)
+			{
+				for (auto conn : candidates)
+				{
+					if (conn == nullptr) continue;
+					Node* a = conn->getSource();
+					Node* b = conn->getTarget();
+
+					if (a == nullptr || b == nullptr || a->isSetForDeletion() || b->isSetForDeletion())
+					{
+						continue;
+					}
+
+					if (type != PATH_TYPE_ANY && a->getType() != type && b->getType() != type)
+					{
+						continue;
+					}
+
+					if (!IsNodeEligible(a, z, type) || !IsNodeEligible(b, z, type))
+					{
+						continue;
+					}
+
+					float qx = 0.0f, qy = 0.0f, qz = 0.0f, dist_sq = 0.0f;
+					if (!ProjectPointOnConnection(x, y, conn, qx, qy, qz, dist_sq))
+					{
+						continue;
+					}
+
+					const bool better = (dist_sq + 0.0001f < best_dist_sq) ||
+						(std::abs(dist_sq - best_dist_sq) <= 0.0001f && best_conn != nullptr && best_conn->isWrongWay() && !conn->isWrongWay());
+					if (better)
+					{
+						best_dist_sq = dist_sq;
+						best_conn = conn;
+						best_qx = qx;
+						best_qy = qy;
+						best_qz = qz;
+					}
+				}
+			};
 
 			Connection* best_conn = nullptr;
 			float best_dist_sq = std::numeric_limits<float>::infinity();
 			float best_qx = 0.0f, best_qy = 0.0f, best_qz = 0.0f;
 
-			for (auto conn : candidate_conns)
+			const float search_radii[] = { 30.0f, 80.0f };
+			for (float radius : search_radii)
 			{
-				Node* a = conn->getSource();
-				Node* b = conn->getTarget();
-
-				if (a == nullptr || b == nullptr || a->isSetForDeletion() || b->isSetForDeletion())
+				std::vector<Connection*> candidate_conns;
+				CollectConnectionsInRadius(x, y, z, radius, type, candidate_conns);
+				evaluate_candidates(candidate_conns, best_conn, best_dist_sq, best_qx, best_qy, best_qz);
+				if (best_conn != nullptr && best_dist_sq <= 10.0f * 10.0f)
 				{
-					continue;
+					break;
 				}
+			}
 
-				if (type != PATH_TYPE_ANY && a->getType() != type && b->getType() != type)
+			if (best_conn == nullptr)
+			{
+				Node* closest_node = Nodes::FindClosest(x, y, z, type, -1);
+				if (closest_node != nullptr)
 				{
-					continue;
-				}
-
-				if (!IsNodeEligible(a, z, type) || !IsNodeEligible(b, z, type))
-				{
-					continue;
-				}
-
-				const float ax = a->getX(), ay = a->getY(), az = a->getZ();
-				const float bx = b->getX(), by = b->getY(), bz = b->getZ();
-
-				const float vx = bx - ax;
-				const float vy = by - ay;
-				const float len_sq = vx * vx + vy * vy;
-
-				if (len_sq < 0.0001f)
-				{
-					continue;
-				}
-
-				const float apx = x - ax;
-				const float apy = y - ay;
-				float t = (apx * vx + apy * vy) / len_sq;
-
-				if (t < 0.0f) t = 0.0f;
-				else if (t > 1.0f) t = 1.0f;
-
-				const float qx = ax + t * vx;
-				const float qy = ay + t * vy;
-				const float qz = az + t * (bz - az);
-
-				const float dx = x - qx;
-				const float dy = y - qy;
-				const float dz = z - qz;
-				const float dist_sq = dx * dx + dy * dy + dz * dz;
-
-				if (dist_sq < best_dist_sq)
-				{
-					best_dist_sq = dist_sq;
-					best_conn = conn;
-					best_qx = qx;
-					best_qy = qy;
-					best_qz = qz;
+					std::vector<Connection*> fallback_conns = closest_node->getConnections();
+					for (auto conn : closest_node->getConnections())
+					{
+						Node* neighbor = (conn->getSource() == closest_node) ? conn->getTarget() : conn->getSource();
+						if (neighbor != nullptr)
+						{
+							for (auto n_conn : neighbor->getConnections())
+							{
+								fallback_conns.push_back(n_conn);
+							}
+						}
+					}
+					evaluate_candidates(fallback_conns, best_conn, best_dist_sq, best_qx, best_qy, best_qz);
 				}
 			}
 
@@ -719,6 +989,78 @@ namespace Container
 			out_road_width = best_conn->getRoadWidth();
 			out_conn_id = best_conn->getId();
 			return true;
+		}
+
+		std::vector<RoadCandidate> FindRoadCandidates(const float x, const float y, const float z, const float max_radius, const PathType type, const int required_component)
+		{
+			std::vector<RoadCandidate> result;
+			if (max_radius <= 0.0f)
+			{
+				return result;
+			}
+
+			// Search slightly beyond max_radius for endpoint nodes so segments whose interiors pass inside max_radius are included.
+			const float node_search_radius = max_radius + 80.0f;
+			std::vector<Connection*> raw_conns;
+			CollectConnectionsInRadius(x, y, z, node_search_radius, type, raw_conns);
+
+			const float max_r_sq = max_radius * max_radius;
+			for (Connection* conn : raw_conns)
+			{
+				if (conn == nullptr || conn->isBlocked())
+				{
+					continue;
+				}
+				Node* a = conn->getSource();
+				Node* b = conn->getTarget();
+				if (a == nullptr || b == nullptr || a->isSetForDeletion() || b->isSetForDeletion() || a->isBlocked() || b->isBlocked())
+				{
+					continue;
+				}
+				if (type != PATH_TYPE_ANY && (a->getType() != type || b->getType() != type))
+				{
+					continue;
+				}
+				if (!IsNodeEligible(a, z, type) || !IsNodeEligible(b, z, type))
+				{
+					continue;
+				}
+				if (required_component != -1 && Nodes::GetConnectedComponent(a, type) != required_component)
+				{
+					continue;
+				}
+
+				float qx = 0.0f, qy = 0.0f, qz = 0.0f, dist_sq = 0.0f;
+				if (!ProjectPointOnConnection(x, y, conn, qx, qy, qz, dist_sq) || dist_sq > max_r_sq)
+				{
+					continue;
+				}
+
+				RoadCandidate cand;
+				cand.conn = conn;
+				cand.qx = qx;
+				cand.qy = qy;
+				cand.qz = qz;
+				cand.dist2d_sq = dist_sq;
+				result.push_back(cand);
+			}
+
+			std::sort(result.begin(), result.end(), [z](const RoadCandidate& lhs, const RoadCandidate& rhs)
+			{
+				const bool lhs_z_ok = std::abs(lhs.qz - z) <= 15.0f;
+				const bool rhs_z_ok = std::abs(rhs.qz - z) <= 15.0f;
+				if (lhs_z_ok != rhs_z_ok)
+				{
+					return lhs_z_ok;
+				}
+				if (lhs.dist2d_sq != rhs.dist2d_sq)
+				{
+					return lhs.dist2d_sq < rhs.dist2d_sq;
+				}
+				return !lhs.conn->isWrongWay() && rhs.conn->isWrongWay();
+			});
+
+			return result;
 		}
 
 		const std::unordered_map<int, Connection*>& GetAll()
@@ -994,11 +1336,6 @@ namespace Container
 			}
 
 			return path->second;
-		}
-
-		Path* FindLocked(const int id)
-		{
-			return Find(id);
 		}
 
 		std::unordered_map<int, Path*> GetAll()

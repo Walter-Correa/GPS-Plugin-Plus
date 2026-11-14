@@ -81,7 +81,7 @@ enum RoutePreference
     ROUTE_PREF_ECO            = 4, // Minimizes elevation climbs, steep hills, and mountain inclines
     ROUTE_PREF_EVASIVE        = 5, // Maximizes egress options; avoids dead-ends and chokepoints
     ROUTE_PREF_AVOID_TOLLS    = 6, // Avoids toll bridges, turnpikes, and pay-gates
-    ROUTE_PREF_PAVED_ONLY     = 7  // Restricts routing strictly to asphalt/concrete paved roads
+    ROUTE_PREF_PAVED_ONLY     = 7  // Avoids connections explicitly marked as unpaved via SetConnectionPaved(conn, false)
 }
 ```
 
@@ -240,12 +240,24 @@ native FindPathAvoidTolls(MapNode:source, MapNode:target, &Path:pathid, PathType
 
 ## 10. Paved vs. Offroad Restrictions
 
-Prevent sports cars and luxury supercars from taking dirt tracks, sand paths, and gravel backroads:
+Avoid dirt tracks, sand paths, and gravel backroads that you mark as unpaved:
 
 ```pawn
 native bool:IsConnectionPaved(Connection:connectionid);
 native SetConnectionPaved(Connection:connectionid, bool:paved);
 native FindPathPavedOnly(MapNode:source, MapNode:target, &Path:pathid, PathType:type = PATH_TYPE_VEHICLE);
+```
+
+> [!NOTE]
+> Because `GPS.dat` carries no native surface flag, all vehicle connections default to paved (`true`). `FindPathPavedOnly` and `ROUTE_PREF_PAVED_ONLY` only avoid connections explicitly marked as unpaved via `SetConnectionPaved(conn, false)`.
+
+```pawn
+// Mark a dirt backroad segment as unpaved so paved-only routing avoids it
+new Connection:dirt_conn;
+if (GetConnectionBetweenMapNodes(node_a, node_b, dirt_conn) == GPS_ERROR_NONE)
+{
+    SetConnectionPaved(dirt_conn, false);
+}
 ```
 
 ---

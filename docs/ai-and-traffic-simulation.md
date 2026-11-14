@@ -280,3 +280,19 @@ native RoadClass:GetConnectionRoadClass(Connection:connectionid, &Float:recommen
 native SetConnectionSpeedLimit(Connection:connectionid, Float:speed_kmh);
 native Float:GetConnectionSpeedLimit(Connection:connectionid);
 ```
+
+---
+
+## 10. Predictive Curve Braking & Stop Detection
+
+When combining `GetPathLaneTarget` with autonomous vehicle velocity control, `GetPathSpeedAdvice` computes upcoming Menger curvature (`12.0` m arc window, `4.5` m/s² lateral limit, `4.0` m/s² longitudinal braking deceleration) and terminal deceleration toward a `FindPathToPoint` stop point, while `IsPathStopReached` detects clean arrival:
+
+```pawn
+new Float:target_kmh, Float:constraint_dist;
+GetPathSpeedAdvice(path, path_idx, vx, vy, max_cruise_kmh, target_kmh, constraint_dist);
+
+if (IsPathStopReached(path, path_idx, vx, vy))
+{
+    DisableAutoPilot(playerid);
+}
+```

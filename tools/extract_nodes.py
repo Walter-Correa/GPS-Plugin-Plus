@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
 """
 GTA San Andreas Node Extractor for GPS-Plugin-Plus
-Extracts vehicle nodes, boat nodes, pedestrian nodes (sidewalks), road widths, and lane counts
-from original GTA San Andreas binary files (NODES0.DAT to NODES63.DAT) into GPS.dat format.
+Extracts vehicle nodes, boat nodes, pedestrian nodes (sidewalks), real lane widths (5.4 m),
+center-divider gaps (width_byte / 16.0), and edge-oriented lane counts from original GTA San Andreas
+binary files (NODES0.DAT to NODES63.DAT) into GPS.dat format.
+
+GPS.dat edge convention (directed source -> target):
+  1 <source> <target> <direction> <road_width_m> <left_lanes> <right_lanes> <oneway>
+  - right_lanes: lanes flowing in the source -> target direction (forward).
+  - left_lanes:  lanes flowing in the target -> source direction (opposite).
+  - oneway = 1:  wrong-way edge has right_lanes = 0, left_lanes > 0 (penalized by pathfinder).
+  - two-way:     nodes lie on the road centerline (two-way divider); gap = wc = nw / 16.0.
+  - one-way:     nodes lie on the carriageway centerline; road_width = n * 5.4 m.
 """
 
 import os
@@ -15,6 +24,8 @@ import time
 PATH_TYPE_VEHICLE = 0
 PATH_TYPE_PEDESTRIAN = 1
 PATH_TYPE_BOAT = 2
+
+LANE_WIDTH = 5.4
 
 NODE_FLAG_NONE = 0
 NODE_FLAG_HIGHWAY = 1 << 0
@@ -89,6 +100,8 @@ def extract_nodes(paths_dir, output_file):
     total_boat = 0
     total_ped = 0
     total_connections = 0
+    node_positions = {}
+    seen_edges = set()
 
     os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
     with open(output_file, "w", encoding="ascii") as out:
@@ -132,6 +145,7 @@ def extract_nodes(paths_dir, output_file):
                     node_flags |= NODE_FLAG_ROADBLOCK
 
                 global_id = base_v + local_id
+                node_positions[global_id] = (world_x, world_y)
 
                 # Line format: 0 x y z ignore id type flags
                 out.write(f"0 {world_x:.6f} {world_y:.6f} {world_z:.6f} -1 {global_id} {node_type} {node_flags}\n")
@@ -159,6 +173,7 @@ def extract_nodes(paths_dir, output_file):
                 total_ped += 1
 
                 global_id = total_veh_nodes + base_p + p_idx
+                node_positions[global_id] = (world_x, world_y)
 
                 # Line format: 0 x y z ignore id type flags
                 out.write(f"0 {world_x:.6f} {world_y:.6f} {world_z:.6f} -1 {global_id} {node_type} {node_flags}\n")
@@ -202,6 +217,11 @@ def extract_nodes(paths_dir, output_file):
                     else:
                         target_global_id = total_veh_nodes + ped_base[target_area] + (target_local - target_nv)
 
+                    edge_key = (source_global_id, target_global_id)
+                    if edge_key in seen_edges:
+                        continue
+                    seen_edges.add(edge_key)
+
                     # Determine road geometry and lanes
                     if is_ped:
                         road_width = 2.5
@@ -215,10 +235,16 @@ def extract_nodes(paths_dir, output_file):
                         oneway = 0
                     else:
                         # Vehicle lane extraction via Section 5 & Section 2 (Navi Nodes)
-                        road_width = max(3.5, float(width_byte)) if width_byte > 0 else 8.0
+                        wc = width_byte / 16.0
                         left_lanes = 1
                         right_lanes = 1
                         oneway = 0
+                        road_width = 2.0 * wc + 2.0 * LANE_WIDTH
+
+                        src_pos = node_positions.get(source_global_id, (0.0, 0.0))
+                        tgt_pos = node_positions.get(target_global_id, (0.0, 0.0))
+                        ex = tgt_pos[0] - src_pos[0]
+                        ey = tgt_pos[1] - src_pos[1]
 
                         navi_pos = (link_id + l_idx) * 2
                         if len(sec5) >= navi_pos + 2:
@@ -229,26 +255,37 @@ def extract_nodes(paths_dir, output_file):
                                 if navi_area in area_data and navi_id < area_data[navi_area]["num_navi"]:
                                     raw_navi = area_data[navi_area]["sec2"][navi_id * 14 : (navi_id + 1) * 14]
                                     if len(raw_navi) >= 14:
-                                        _, _, _, _, _, _, navi_flags = struct.unpack("<hhHHbbI", raw_navi)
-                                        nl = (navi_flags >> 8) & 0x07
-                                        nr = (navi_flags >> 11) & 0x07
+                                        _, _, navi_area_tgt, navi_node_tgt, navi_dx, navi_dy, navi_flags = struct.unpack("<hhHHbbI", raw_navi)
+                                        nl = (navi_flags >> 8) & 0x07   # lanes along navi vector
+                                        nr = (navi_flags >> 11) & 0x07  # lanes in opposite direction
                                         nw = navi_flags & 0xFF
 
-                                        if nl > 0 or nr > 0:
-                                            left_lanes = nl
-                                            right_lanes = nr
-                                            if nl == 0 and nr > 0:
-                                                oneway = 1
-                                            elif nr == 0 and nl > 0:
-                                                oneway = 1
-
                                         if nw > 0:
-                                            road_width = float(nw)
-                                        elif width_byte > 0:
-                                            road_width = float(width_byte)
+                                            wc = nw / 16.0
+
+                                        navi_tgt = None
+                                        if navi_area_tgt in num_veh_map:
+                                            nv_ = num_veh_map[navi_area_tgt]
+                                            navi_tgt = (veh_base[navi_area_tgt] + navi_node_tgt) if navi_node_tgt < nv_ else (total_veh_nodes + ped_base[navi_area_tgt] + (navi_node_tgt - nv_))
+                                        if navi_tgt == target_global_id:
+                                            along = True
+                                        elif navi_tgt == source_global_id:
+                                            along = False
                                         else:
-                                            total_l = max(1, left_lanes + right_lanes)
-                                            road_width = total_l * 3.5
+                                            along = (ex * navi_dx + ey * navi_dy) > 0
+
+                                        fwd = nl if along else nr   # lanes along source -> target
+                                        back = nr if along else nl  # lanes in opposite direction
+
+                                        if fwd > 0 or back > 0:
+                                            right_lanes = fwd
+                                            left_lanes = back
+                                            oneway = 1 if (fwd == 0 or back == 0) else 0
+
+                                        if oneway:
+                                            road_width = (left_lanes + right_lanes) * LANE_WIDTH
+                                        else:
+                                            road_width = 2.0 * wc + (left_lanes + right_lanes) * LANE_WIDTH
 
                     # Line format: 1 id id2 direction width left_lanes right_lanes oneway
                     out.write(f"1 {source_global_id} {target_global_id} 0 {road_width:.2f} {left_lanes} {right_lanes} {oneway}\n")

@@ -9,7 +9,7 @@
 It empowers Pawn developers to build intelligent, state-of-the-art navigation systems: **Threaded A\* Route Calculations**, **Real-Time Turn-by-Turn Maneuvers**, **Catmull-Rom Spline Curve Smoothing**, **Douglas-Peucker Route Decimation**, **Autonomous Pure Pursuit Bot Steering**, **High-Speed Police Intercept Vectors**, **Dynamic Traffic Jams & Roadblocks**, **Waze-Style Speed Radars**, and **Nearest Service Queries by Real Road Distance**—with full asynchronous worker thread support (zero server tick lag on threaded queries) and drop-in compatibility.
 
 > [!NOTE]
-> This project is conceptually inspired by the original [samp-gps-plugin](https://github.com/kristoisberg/samp-gps-plugin) by [@kristoisberg](https://github.com/kristoisberg) and its fork by [@AmyrAhmady](https://github.com/AmyrAhmady). It has been completely re-architected and modernized from the ground up, introducing dual-stack architecture (native open.mp Component + SA-MP Plugin), a native multi-threaded C++ worker pool, PawnPlus task async coroutines, multi-modal routing (vehicles, pedestrians, boats), and 105+ high-performance spatial natives.
+> This project is conceptually inspired by the original [samp-gps-plugin](https://github.com/kristoisberg/samp-gps-plugin) by [@kristoisberg](https://github.com/kristoisberg) and its fork by [@AmyrAhmady](https://github.com/AmyrAhmady). It has been completely re-architected and modernized from the ground up, introducing dual-stack architecture (native open.mp Component + SA-MP Plugin), a native multi-threaded C++ worker pool, PawnPlus task async coroutines, multi-modal routing (vehicles, pedestrians, boats), and 113+ high-performance spatial natives.
 
 ---
 
@@ -48,7 +48,7 @@ Comprehensive, modular guides and technical references are available in the [`do
 | **[🧭 Navigation & Geometry](docs/navigation-and-geometry.md)** | Real-time GPS tracking, turn-by-turn guidance, roundabout detection, Catmull-Rom splines, and route decimation. |
 | **[🤖 AI & Traffic Simulation](docs/ai-and-traffic-simulation.md)** | Pure Pursuit bot steering, police intercept vectors, fugitive evasion, speed radars, and real road-distance queries. |
 | **[📍 Map Nodes & Spatial Analytics](docs/map-nodes-and-spatial.md)** | Map node graph lifecycle, multi-lane roads, curb-side alignment, neighborhood zones, and path serialization. |
-| **[📚 Complete API Reference](docs/api-reference.md)** | Exhaustive technical dictionary covering all 105 native functions, callbacks, enums, and error codes. |
+| **[📚 Complete API Reference](docs/api-reference.md)** | Exhaustive technical dictionary covering all 113 native functions, callbacks, enums, and error codes. |
 
 ---
 
@@ -157,7 +157,7 @@ public OnPlayerRouteReady(Path:path, playerid)
 
 ## Complete API Reference
 
-All 105 native functions, callbacks, style enumerations, and constants are exhaustively documented with signature parameters, return values, and code snippets in **[`docs/api-reference.md`](docs/api-reference.md)**:
+All 113 native functions, callbacks, style enumerations, and constants are exhaustively documented with signature parameters, return values, and code snippets in **[`docs/api-reference.md`](docs/api-reference.md)**:
 
 * **[Map Node Management](docs/api-reference.md#1-map-node-management):** `CreateMapNode`, `DestroyMapNode`, `IsValidMapNode`, `GetMapNodePos`, `GetRandomMapNode`...
 * **[Road Connections & Lanes](docs/api-reference.md#2-road-connections--lanes):** `CreateConnection`, `GetConnectionLaneInfo`, `GetConnectionLanePos`, `IsConnectionOneWay`...
@@ -206,6 +206,24 @@ make -j$(nproc)
 
 <details>
 <summary>Show the version history</summary>
+
+### 2.1.0 — 14/11/2026
+- **Accurate GTA SA One-Way Orientation & Lane Geometry Overhaul:**
+  - Regenerated `GPS.dat` from retail GTA San Andreas `NODES*.DAT` using real `5.4 m` lane width, navi-derived median gap (`width / 16.0`), edge-oriented `left_lanes`/`right_lanes`, and `(source, target)` edge deduplication (enforced on load too).
+  - Built-in **25.0x wrong-way pathfinding penalty** across all routing/reachability/nearest-road searches for one-way streets in reverse (`IsConnectionWrongWay`), preventing wrong-way shortcuts while preserving fallback escape routes.
+  - Updated `Connection` lane offset geometry (`GetConnectionLanePos` with `0` = leftmost, `n-1` = rightmost in travel direction; divided median support; one-way carriageway centering), road class heuristics, narrow-road checks, and default paved status for vehicle roads.
+  - Improved `FindClosestRoadPoint` spatial grid lookup (`30 m -> 80 m` multi-node candidate radius) and fixed `IsPointAgainstTraffic` (one-way orientation, divided median exclusion, off-road threshold) and `GetRoadPositionInfo` (`ROAD_POS_CURB` vs `ROAD_POS_EDGE` swap & legal flow heading).
+  - Added new natives `IsConnectionWrongWay`, `GetClosestMapNodeToPointAngle`, and `GetPathLaneTarget` (mitered right-lane target + lookahead + signed `lateral_error`), and updated `GetPurePursuitSteering` to track the vehicle lane line.
+  - Added Phase 2 & 3 autopilot, ETA, and routing primitives: connected-component filtering, stop-point truncation (`FindPathToPoint`, `IsPathStopReached`), predictive Menger curvature and terminal braking (`GetPathSpeedAdvice`), longitudinal road elevation/slope profiling (`GetPathRoadProfile`), and physics-aware remaining ETA estimation (`GetPathTimeEstimate`).
+  - **Behavior changes (same API):**
+    - All route and reachability searches now apply a `25.0x` penalty when traversing one-way edges in reverse (`IsConnectionWrongWay`); in `GetReachableMapNodes`, distance and time budgets include this penalty on wrong-way edges.
+    - `GetConnectionLanePos` uses real `5.4 m` lane widths with index `0` as the leftmost travel lane in flow direction and centered carriageways on one-way roads.
+    - `GetClosestPointOnRoad` returns the legal flow angle along the road and resolves curb offset on the legal side.
+    - `IsPointAgainstTraffic` returns `false` when off-road or over a divided median.
+    - `GetConnectionRoadClass` and default road speed limits derive from the updated lane-width and median geometry, so classifications may differ from 2.0.0.
+    - `GetPurePursuitSteering` tracks the rightmost travel lane centerline instead of the raw center node line.
+    - All vehicle connections start as paved (`true`) by default because `GPS.dat` has no surface flag (use `SetConnectionPaved(conn, false)` to mark unpaved roads).
+    - `bool:` natives return `0` (false) instead of `-5` (`GPS_ERROR_INTERNAL`) if an internal C++ exception occurs, and exception logs include the failing native name.
 
 ### 2.0.0 — 08/11/2026
 - Complete architectural evolution to **GPS Plugin Plus**:

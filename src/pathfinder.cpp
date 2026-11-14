@@ -39,7 +39,7 @@ namespace Pathfinder
 	thread_local uint32_t tl_visited_generation = 0;
 
 
-	bool FindPathNodes(Node* start, Node* target, std::vector<Node*>& out_nodes, float& out_length, const PathType type, const RoutePreference pref, const VehicleCategory cat, const float danger_penalty, const float max_slope_gradient, const bool avoid_tolls, const bool evasive, const float vehicle_height, const bool allow_yield)
+	bool FindPathNodes(Node* start, Node* target, std::vector<Node*>& out_nodes, float& out_length, const PathType type, const RoutePreference pref, const VehicleCategory cat, const float danger_penalty, const float max_slope_gradient, const bool avoid_tolls, const bool evasive, const float vehicle_height, const bool allow_yield, const Connection* forbidden_edge)
 	{
 		out_nodes.clear();
 		out_length = 0.0f;
@@ -147,12 +147,12 @@ namespace Pathfinder
 
 			for (auto connection : current_node->node->getConnections())
 			{
-				if (connection->isBlocked())
+				if (connection->isBlocked() || connection == forbidden_edge)
 				{
 					continue;
 				}
 
-				if (cat == VEHICLE_CAT_HEAVY_TRUCK && connection->getRoadWidth() < 6.0f)
+				if (cat == VEHICLE_CAT_HEAVY_TRUCK && connection->isNarrow())
 				{
 					continue;
 				}
@@ -224,7 +224,7 @@ namespace Pathfinder
 					}
 				}
 
-				if (cat == VEHICLE_CAT_MOTORCYCLE && connection->getRoadWidth() < 6.0f)
+				if (cat == VEHICLE_CAT_MOTORCYCLE && connection->isNarrow())
 				{
 					weight_factor *= 0.8f;
 				}
@@ -238,11 +238,11 @@ namespace Pathfinder
 				// Evasive preferences
 				if (evasive || pref == ROUTE_PREF_EVASIVE)
 				{
-					if ((connection_target->getFlags() & NODE_FLAG_HIGHWAY) != 0 || connection->getRightLanes() >= 2)
+					if ((connection_target->getFlags() & NODE_FLAG_HIGHWAY) != 0 || connection->getTravelLanes() >= 2)
 					{
 						weight_factor *= 2.5f;
 					}
-					if (connection->getRoadWidth() < 6.5f)
+					if (connection->isNarrow())
 					{
 						weight_factor *= 0.65f;
 					}
@@ -279,6 +279,11 @@ namespace Pathfinder
 					{
 						weight_factor *= (1.0f + danger * penalty);
 					}
+				}
+
+				if (connection->isWrongWay())
+				{
+					weight_factor *= WRONG_WAY_PENALTY; // wrong-way fallback only as last resort
 				}
 
 				const float traffic_mult = connection->getTrafficMultiplier();
@@ -532,6 +537,10 @@ namespace Pathfinder
 				if (visited_target_ids.find(tgt->getID()) != visited_target_ids.end()) continue;
 
 				float score = conn->getRoadWidth() + conn->getDistance();
+				if (conn->isWrongWay())
+				{
+					score /= WRONG_WAY_PENALTY;
+				}
 				if (score > best_conn_score)
 				{
 					best_conn_score = score;
@@ -646,6 +655,10 @@ namespace Pathfinder
 				if (target == nullptr || target->isBlocked() || target->isSetForDeletion() || (type != PATH_TYPE_ANY && target->getType() != type)) continue;
 
 				float edge_cost = conn->getDistance();
+				if (conn->isWrongWay())
+				{
+					edge_cost *= WRONG_WAY_PENALTY;
+				}
 				if (by_time)
 				{
 					edge_cost /= speed_mps;
@@ -905,7 +918,11 @@ namespace Pathfinder
 				auto next_node = get_node(target_id, target);
 				if (next_node->closed) continue;
 
-				const float cost = connection->getDistance() * connection->getTrafficMultiplier();
+				float cost = connection->getDistance() * connection->getTrafficMultiplier();
+				if (connection->isWrongWay())
+				{
+					cost *= WRONG_WAY_PENALTY;
+				}
 				const float distance = current->distance + cost;
 
 				if (next_node->distance > distance)

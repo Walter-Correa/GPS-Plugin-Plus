@@ -19,6 +19,11 @@ public:
 	int getLeftLanes() const;
 	int getRightLanes() const;
 	bool isOneWay() const;
+	bool isWrongWay() const { return one_way_ && right_lanes_ == 0 && left_lanes_ > 0; }
+	int getTravelLanes() const;
+	float getCenterGap() const;
+	float getLaneOffset(int lane_index) const;
+	bool isNarrow() const { return one_way_ && getTravelLanes() <= 1 && getCenterGap() == 0.0f; }
 
 	bool isBlocked() const;
 	void setBlocked(bool blocked);

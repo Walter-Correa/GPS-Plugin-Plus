@@ -122,12 +122,14 @@ native GetConnectionBetweenMapNodes(MapNode:source, MapNode:target, &Connection:
 native GetConnectionLaneInfo(Connection:connectionid, &Float:road_width, &left_lanes, &right_lanes);
 native GetConnectionLanePos(Connection:connectionid, lane_index, &Float:x, &Float:y, &Float:z);
 native bool:IsConnectionOneWay(Connection:connectionid);
+native bool:IsConnectionWrongWay(Connection:connectionid);
 
 native GetDistanceBetweenMapNodes(MapNode:first, MapNode:second, &Float:distance);
 native GetAngleBetweenMapNodes(MapNode:first, MapNode:second, &Float:angle, bool:facing_angle = false);
 native GetMapNodeDistanceFromPoint(MapNode:nodeid, Float:x, Float:y, Float:z, &Float:distance);
 native GetMapNodeAngleFromPoint(MapNode:nodeid, Float:x, Float:y, &Float:angle, bool:facing_angle = false);
 native GetClosestMapNodeToPoint(Float:x, Float:y, Float:z, &MapNode:nodeid, MapNode:ignorednode = GPS_INVALID_MAP_NODE_ID, PathType:type = PATH_TYPE_VEHICLE);
+native GetClosestMapNodeToPointAngle(Float:x, Float:y, Float:z, Float:angle, &MapNode:nodeid, Float:max_dist = 20.0, PathType:type = PATH_TYPE_VEHICLE);
 
 native GetHighestMapNodeID(PathType:type = PATH_TYPE_VEHICLE);
 native GetRandomMapNode(&MapNode:nodeid, PathType:type = PATH_TYPE_VEHICLE, Float:minz = -99999.0, Float:maxz = 99999.0);
@@ -242,6 +244,13 @@ native SetConnectionMaxHeight(Connection:connectionid, Float:max_height_meters);
 native Float:GetConnectionMaxHeight(Connection:connectionid);
 native SetAreaMaxHeight(Float:minx, Float:miny, Float:maxx, Float:maxy, Float:max_height_meters);
 native FindPathWithHeightLimit(MapNode:source, MapNode:target, Float:vehicle_height, &Path:pathid, PathType:type = PATH_TYPE_VEHICLE, RoutePreference:pref = ROUTE_PREF_SHORTEST);
+
+native GetPathLaneTarget(Path:pathid, Float:x, Float:y, Float:lookahead, &path_index, &Float:target_x, &Float:target_y, &Float:target_z, &Float:lateral_error);
+native FindPathToPoint(MapNode:source, Float:x, Float:y, Float:z, &Path:pathid, &Float:stop_x, &Float:stop_y, &Float:stop_z, &Float:dist_to_road, Float:max_road_dist = 150.0, PathType:type = PATH_TYPE_VEHICLE, RoutePreference:pref = ROUTE_PREF_SHORTEST);
+native bool:IsPathStopReached(Path:pathid, path_index, Float:x, Float:y);
+native GetPathSpeedAdvice(Path:pathid, path_index, Float:x, Float:y, Float:max_speed_kmh, &Float:target_speed_kmh, &Float:dist_to_constraint);
+native GetPathRoadProfile(Path:pathid, path_index, Float:x, Float:y, Float:ahead_dist, &Float:road_z, &Float:grade_ahead);
+native GetPathTimeEstimate(Path:pathid, path_index, Float:x, Float:y, &Float:seconds, &Float:remaining_dist, Float:current_speed_kmh = 0.0, Float:max_speed_kmh = 0.0);
 
 
 #if defined _PawnPlus_included

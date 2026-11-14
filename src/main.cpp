@@ -39,7 +39,7 @@ PLUGIN_EXPORT bool PLUGIN_CALL Load(void **ppData)
 	setenv("GPS_LEGACY_PLUGIN_LOADED", "1", 1);
 #endif
 
-	GPSLogger::Log("[GPS-Plugin-Plus]: v2.0.0 loaded.");
+	GPSLogger::Log("[GPS-Plugin-Plus]: v2.1.0 loaded.");
 	CheckComponentConflict();
 
 	auto config = ConfigReader("server.cfg");

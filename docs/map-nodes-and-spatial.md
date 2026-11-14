@@ -59,15 +59,23 @@ native GetConnectionBetweenMapNodes(MapNode:source, MapNode:target, &Connection:
 native GetConnectionLaneInfo(Connection:connectionid, &Float:road_width, &left_lanes, &right_lanes);
 native GetConnectionLanePos(Connection:connectionid, lane_index, &Float:x, &Float:y, &Float:z);
 native bool:IsConnectionOneWay(Connection:connectionid);
+native bool:IsConnectionWrongWay(Connection:connectionid);
 ```
 
+### Lane Geometry, One-Way Convention & Wrong-Way Fallback
+* **GTA SA Lane Width:** Each vehicle travel lane is `5.4 m` wide (`GTA_LANE_WIDTH`).
+* **Node Centerline vs. Median:**
+  * **Two-way roads:** The node segment runs down the center of the road/median. The half-width median gap is derived from real width as `center_gap = max(0, (road_width - (left_lanes + right_lanes) * 5.4) / 2)`. Legal right-hand lane centers lie at `center_gap + (0.5 + i) * 5.4` (`i = 0` closest to center, `i = right_lanes - 1` closest to the right curb).
+  * **One-way roads:** The node segment runs down the center of the one-way carriageway (`center_gap = 0`), with lane offsets at `(0.5 - 0.5 * n + i) * 5.4` (so `n = 1` puts index `0` at `0 m`, centered on the street).
+* **One-Way Convention (`GPS.dat`):** Directed edges store `right_lanes` along `source -> target` and `left_lanes` in the opposite direction. Legal one-way edges have `one_way = true, right_lanes > 0, left_lanes = 0`. Mirrored wrong-way edges remain in the graph with `one_way = true, right_lanes = 0, left_lanes > 0` and automatically incur a **25.0x pathfinding penalty** (`IsConnectionWrongWay` returns `true`) so routing obeys one-way streets without deadlocking trapped spawns.
+
 ### Precise Lane Coordinate Query
-To place an AI vehicle into a specific lane (e.g. the far-right slow lane of a 4-lane freeway), use `GetConnectionLanePos`:
+To place an AI vehicle into a specific lane (e.g. the rightmost lane `travel_lanes - 1` or leftmost lane `0`), use `GetConnectionLanePos`:
 
 ```pawn
 new Float:lx, Float:ly, Float:lz;
-// Lane indices: 0 = leftmost, right_lanes - 1 = rightmost
-GetConnectionLanePos(highway_conn, 2, lx, ly, lz);
+// Lane indices: 0 = leftmost in travel direction, n - 1 = rightmost
+GetConnectionLanePos(highway_conn, 1, lx, ly, lz);
 SetVehiclePos(patrol_car, lx, ly, lz);
 ```
 
@@ -90,12 +98,29 @@ native GetClosestMapNodeToPoint(
     PathType:type = PATH_TYPE_VEHICLE
 );
 
+native GetClosestMapNodeToPointAngle(
+    Float:x, Float:y, Float:z, 
+    Float:angle, 
+    &MapNode:nodeid, 
+    Float:max_dist = 20.0, 
+    PathType:type = PATH_TYPE_VEHICLE
+);
+
 native GetClosestPointOnRoad(
     Float:x, Float:y, Float:z, 
     &Float:out_x, &Float:out_y, &Float:out_z, 
     &Float:angle, 
     &Connection:connectionid = INVALID_CONNECTION_ID, 
     PathType:type = PATH_TYPE_VEHICLE
+);
+
+native GetPathLaneTarget(
+    Path:pathid,
+    Float:x, Float:y,
+    Float:lookahead,
+    &path_index,
+    &Float:target_x, &Float:target_y, &Float:target_z,
+    &Float:lateral_error
 );
 ```
 

@@ -214,15 +214,18 @@ Retrieves physical road width and lane counts for both directions.
 ```pawn
 native GetConnectionLanePos(Connection:connectionid, lane_index, &Float:x, &Float:y, &Float:z);
 ```
-Calculates the exact 3D midpoint coordinate of a specific lane along a connection.
+Calculates the exact 3D coordinate at the end of a specific lane along a connection using GTA SA lane geometry (`5.4 m` lane width; center divider gap on two-way roads, road center on one-way roads).
+* **Lane Indices:** `0` = leftmost lane in the travel direction (closest to the center line on two-way roads), up to `travel_lanes - 1` = rightmost lane (nearest the curb). When there is only 1 travel lane on a one-way road, index `0` is centered on the road.
 
 ---
 
-### `IsConnectionOneWay`
+### `IsConnectionOneWay` / `IsConnectionWrongWay`
 ```pawn
 native bool:IsConnectionOneWay(Connection:connectionid);
+native bool:IsConnectionWrongWay(Connection:connectionid);
 ```
-Returns `true` if traffic is restricted to a single direction.
+* `IsConnectionOneWay`: returns `true` if traffic is restricted to a single direction.
+* `IsConnectionWrongWay`: returns `true` if the directed edge `source -> target` is against legal flow on a one-way street (`one_way && right_lanes == 0 && left_lanes > 0`). In `GPS.dat`, legal one-way flow always has `right_lanes > 0`; wrong-way edges remain in the graph with a `25.0x` pathfinder cost penalty as a last-resort fallback rather than hard-blocking routes.
 
 ---
 
@@ -254,7 +257,7 @@ Computes distance and relative angle from an arbitrary world coordinate to a map
 
 ---
 
-### `GetClosestMapNodeToPoint`
+### `GetClosestMapNodeToPoint` / `GetClosestMapNodeToPointAngle`
 ```pawn
 native GetClosestMapNodeToPoint(
     Float:x, Float:y, Float:z, 
@@ -262,8 +265,16 @@ native GetClosestMapNodeToPoint(
     MapNode:ignorednode = GPS_INVALID_MAP_NODE_ID, 
     PathType:type = PATH_TYPE_VEHICLE
 );
+native GetClosestMapNodeToPointAngle(
+    Float:x, Float:y, Float:z, 
+    Float:angle, 
+    &MapNode:nodeid, 
+    Float:max_dist = 20.0, 
+    PathType:type = PATH_TYPE_VEHICLE
+);
 ```
-Searches the spatial index for the closest node to the specified coordinate.
+* `GetClosestMapNodeToPoint`: searches the spatial index for the closest node to the specified coordinate.
+* `GetClosestMapNodeToPointAngle`: prefers nodes within `max_dist` that have at least one unblocked legal outgoing edge aligned within `90°` of `angle` (`GetVehicleZAngle` / `GetPlayerFacingAngle`), falling back to `GetClosestMapNodeToPoint` if none match.
 
 ---
 
@@ -292,7 +303,7 @@ native GetRoadPositionInfo(
     PathType:type = PATH_TYPE_VEHICLE
 );
 ```
-Snaps a coordinate to the road centerline (`ROAD_POS_CENTER`), sidewalk curb (`ROAD_POS_CURB`), or outer edge shoulder (`ROAD_POS_EDGE`), returning the exact heading of traffic.
+Snaps a coordinate to the road centerline (`ROAD_POS_CENTER`), sidewalk curb (`ROAD_POS_CURB`, inside the rightmost lane ~1.3 m from the outer pavement edge), or outer edge shoulder (`ROAD_POS_EDGE`, 1.5 m outside the outer edge), returning the legal traffic flow heading (`angle`) and real road width (`road_width`).
 
 ---
 
@@ -313,6 +324,26 @@ native FindPath(
 );
 ```
 Calculates a route synchronously on the server main thread.
+
+---
+
+### `FindPathToPoint`
+```pawn
+native FindPathToPoint(
+    MapNode:source,
+    Float:x, Float:y, Float:z,
+    &Path:pathid,
+    &Float:stop_x, &Float:stop_y, &Float:stop_z,
+    &Float:dist_to_road,
+    Float:max_road_dist = 150.0,
+    PathType:type = PATH_TYPE_VEHICLE,
+    RoutePreference:pref = ROUTE_PREF_SHORTEST
+);
+```
+Projects `(x, y, z)` onto nearby active road edges belonging to the same connected component as `source` (within `max_road_dist`, preferring segments within `±15.0` m in `z`), prevents an immediate backtrack into the final segment, and returns the rightmost-lane stop point `(stop_x, stop_y, stop_z)` along with `dist_to_road`. The generated `Path` stores this stop metadata so `GetPathLaneTarget`, `GetPathSpeedAdvice`, and `IsPathStopReached` truncate cleanly at the stop point instead of overshooting to the far intersection node.
+
+> [!NOTE]
+> `FindPathToPoint` runs synchronously on the server main thread just like `FindPath`. Normally it costs the same as a single `FindPath`, though destinations requiring fallback candidates (such as dead-end streets) may evaluate multiple candidate routes. Avoid calling it in bulk for dozens of NPCs in the same tick.
 
 ---
 
@@ -396,6 +427,9 @@ native bool:IsMapNodeBlocked(MapNode:nodeid);
 ```
 Closes or re-opens a map node. Blocked nodes are excluded from all pathfinding.
 
+> [!NOTE]
+> The first `FindPathToPoint` call after blocking or unblocking a node or connection recomputes the entire connected-component map, so very frequent toggling carries extra cost.
+
 ---
 
 ### `SetConnectionBlocked` / `IsConnectionBlocked`
@@ -404,6 +438,9 @@ native SetConnectionBlocked(Connection:connectionid, bool:blocked);
 native bool:IsConnectionBlocked(Connection:connectionid);
 ```
 Closes or re-opens an individual road connection.
+
+> [!NOTE]
+> The first `FindPathToPoint` call after blocking or unblocking a node or connection recomputes the entire connected-component map, so very frequent toggling carries extra cost.
 
 ---
 
@@ -457,6 +494,9 @@ native GetPathRemainingInfo(
 ```
 Calculates remaining meters and ETA from `current_step` to final destination.
 
+> [!NOTE]
+> Simple estimate (`distance / speed`). To account for curves, acceleration, braking, and per-road speed limits, use [`GetPathTimeEstimate`](#getpathtimeestimate).
+
 ---
 
 ### `GetPathEstimatedTravelTime`
@@ -464,6 +504,45 @@ Calculates remaining meters and ETA from `current_step` to final destination.
 native GetPathEstimatedTravelTime(Path:pathid, Float:average_speed_kmh, &Float:seconds);
 ```
 Calculates expected journey duration across the full path at a given average speed.
+
+> [!NOTE]
+> Simple estimate (`distance / speed`). To account for curves, acceleration, braking, and per-road speed limits, use [`GetPathTimeEstimate`](#getpathtimeestimate).
+
+---
+
+### `GetPathTimeEstimate`
+```pawn
+native GetPathTimeEstimate(
+    Path:pathid,
+    path_index,
+    Float:x, Float:y,
+    &Float:seconds,
+    &Float:remaining_dist,
+    Float:current_speed_kmh = 0.0,
+    Float:max_speed_kmh = 0.0
+);
+```
+Estimates remaining travel time (`seconds`) and lane-line distance (`remaining_dist`) from `(x, y)` to the end of the path (or stop point), accounting for cornering speed reductions, acceleration (`2.8` m/s²), braking (`4.4` m/s²), final stop deceleration, and per-segment road speed limits.
+
+| Parameter | Description |
+|---|---|
+| `pathid` | Target path handle. |
+| `path_index` | Current segment index along the path (matches `GetPathLaneTarget` / `GetPathSpeedAdvice`). Use `0` at trip start. |
+| `x`, `y` | Current vehicle position (or start node position at trip start). |
+| `seconds` | Output estimated remaining time in seconds. |
+| `remaining_dist` | Output remaining distance along the lane centerline in meters. |
+| `current_speed_kmh` | Current vehicle speed in km/h (`0.0` assumes starting from rest). |
+| `max_speed_kmh` | `> 0.0`: fixed maximum speed cap across the entire path, ignoring road speed limits (ideal for autopilot). `0.0`: no global cap; each segment uses `Connection::getSpeedLimit()` (`SetConnectionSpeedLimit` override or road-class default: alley `30`, residential `50`, avenue `80`, highway `120` km/h). |
+
+**Returns:** `GPS_ERROR_NONE` on success, `GPS_ERROR_INVALID_PATH` if the path does not exist or has fewer than 2 nodes, `GPS_ERROR_INVALID_PARAMS` if `current_speed_kmh < 0` or `max_speed_kmh < 0` (or invalid output references), or `GPS_ERROR_INTERNAL` if lane construction fails.
+
+```pawn
+// Autopilot: player speed cap, starting from rest
+GetPathTimeEstimate(path, 0, vx, vy, seconds, dist, 0.0, AutoPilotoVar[playerid][AP_MaxSpeed]);
+
+// Standard GPS: follows each road's speed limit starting from current vehicle speed
+GetPathTimeEstimate(path, idx, vx, vy, seconds, dist, GetVehicleSpeed(veh));
+```
 
 ---
 
@@ -560,6 +639,64 @@ Calculates parallel left/right offset positions for escort motorcades and multi-
 
 ## 8. Autonomous AI, Interception & Evasion
 
+### `GetPathLaneTarget`
+```pawn
+native GetPathLaneTarget(
+    Path:pathid,
+    Float:x, Float:y,
+    Float:lookahead,
+    &path_index,
+    &Float:target_x, &Float:target_y, &Float:target_z,
+    &Float:lateral_error
+);
+```
+Computes the autonomous driving target along the right-hand lane centerline (rightmost travel lane, or road center for single-lane one-way/non-vehicle edges) with continuous mitered corners and interpolated `target_z`.
+* `path_index` is an in/out segment hint clamped to `[path_index - 1, path_index + 6]` to prevent loop-jumping; `lateral_error` is signed lateral distance in meters (positive when the vehicle is to the right of the lane center). If the path was created by `FindPathToPoint`, the final lane segment is truncated at `(stop_x, stop_y, stop_z)`.
+
+---
+
+### `IsPathStopReached`
+```pawn
+native bool:IsPathStopReached(
+    Path:pathid,
+    path_index,
+    Float:x, Float:y
+);
+```
+Returns `true` when `(x, y)` has reached the projected stop point (within `6.0` m, or on the final segment within `5.0` m / `t >= 0.99`) for `FindPathToPoint` paths, or within `10.0` m of the terminal endpoint for generic paths.
+
+---
+
+### `GetPathSpeedAdvice`
+```pawn
+native GetPathSpeedAdvice(
+    Path:pathid,
+    path_index,
+    Float:x, Float:y,
+    Float:max_speed_kmh,
+    &Float:target_speed_kmh,
+    &Float:dist_to_constraint
+);
+```
+Evaluates upcoming path curvature along the lane polyline using a `12.0` m sliding Menger arc window (`a_lat = 4.5` m/s², `v_min = 22.0` km/h) and braking kinematics (`a_brake = 4.0` m/s², plus `v = 0` at the stop point if present) over the stopping horizon, outputting the recommended `target_speed_kmh` capped by `max_speed_kmh` and `dist_to_constraint` (`-1.0` when unconstrained).
+
+---
+
+### `GetPathRoadProfile`
+```pawn
+native GetPathRoadProfile(
+    Path:pathid,
+    path_index,
+    Float:x, Float:y,
+    Float:ahead_dist,
+    &Float:road_z,
+    &Float:grade_ahead
+);
+```
+Interpolates the vertical road elevation `road_z` at `(x, y)` along the path and computes the longitudinal slope `grade_ahead = clamp((z_ahead - road_z) / dist, -0.35, 0.35)` over `ahead_dist` meters ahead for accurate ramp, overpass, and tunnel pitch/vertical velocity tracking.
+
+---
+
 ### `GetPurePursuitSteering`
 ```pawn
 native GetPurePursuitSteering(
@@ -570,7 +707,7 @@ native GetPurePursuitSteering(
     &Float:recommended_speed_kmh
 );
 ```
-Pure Pursuit controller outputting dynamic steering wheel ratio ($-1.0$ to $+1.0$) and cornering speed for autonomous bot drivers.
+Pure Pursuit controller outputting dynamic steering wheel ratio ($-1.0$ to $+1.0$) and cornering speed for autonomous bot drivers. Uses the same rightmost-lane offset centerline as `GetPathLaneTarget` for vehicle paths.
 
 ---
 
@@ -721,7 +858,7 @@ Calculates fuel-efficient routes avoiding steep grades and computes elevation te
 ```pawn
 native IsPointAgainstTraffic(Float:x, Float:y, Float:z, Float:facing_angle, &bool:against_traffic);
 ```
-Detects if a vehicle is facing the opposite direction of legal traffic flow.
+Detects if a vehicle is facing against legal traffic flow (`|delta| > 90°`) using multi-node spatial radius lookup (`30 m` -> `80 m`). Returns `false` when the vehicle is inside a divided road median or off-road beyond `4.0 m` past the outer lane edge.
 
 ---
 
@@ -731,7 +868,7 @@ native bool:IsConnectionPaved(Connection:connectionid);
 native SetConnectionPaved(Connection:connectionid, bool:paved);
 native FindPathPavedOnly(MapNode:source, MapNode:target, &Path:pathid, PathType:type = PATH_TYPE_VEHICLE);
 ```
-Manages paved asphalt vs dirt status and restricts paths strictly to asphalt.
+Manages paved asphalt vs dirt status and penalizes unpaved roads during pathfinding. Because `GPS.dat` carries no native surface flag, all vehicle connections default to paved (`true`); `ROUTE_PREF_PAVED_ONLY` / `FindPathPavedOnly` only affect connections explicitly marked unpaved via `SetConnectionPaved(conn, false)`.
 
 ---
 

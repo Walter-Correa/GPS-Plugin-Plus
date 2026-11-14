@@ -105,3 +105,28 @@ void Path::setOwnerAmx(AMX* amx)
 {
 	owner_amx_ = amx;
 }
+
+
+void Path::setStopPoint(const float x, const float y, const float z, const float last_seg_dist)
+{
+	has_stop_point_ = true;
+	stop_x_ = x;
+	stop_y_ = y;
+	stop_z_ = z;
+	stop_seg_dist_ = last_seg_dist;
+}
+
+
+bool Path::hasStopPoint() const
+{
+	return has_stop_point_;
+}
+
+
+void Path::getStopPoint(float& x, float& y, float& z, float& last_seg_dist) const
+{
+	x = stop_x_;
+	y = stop_y_;
+	z = stop_z_;
+	last_seg_dist = stop_seg_dist_;
+}

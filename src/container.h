@@ -30,7 +30,6 @@
 namespace Container
 {
 	std::shared_mutex& GetGraphMutex();
-	std::mutex& GetPathsMutex();
 
 	void IncrementPendingWriters();
 	void DecrementPendingWriters();
@@ -57,6 +56,7 @@ namespace Container
 		Node* Find(int id);
 		Node* FindIncludingPending(int id);
 		Node* FindClosest(float x, float y, float z, PathType type = PATH_TYPE_VEHICLE, int ignored_id = -1);
+		Node* FindClosestWithAngle(float x, float y, float z, float angle, float max_dist = 20.0f, PathType type = PATH_TYPE_VEHICLE);
 		const std::unordered_map<int, Node*>& GetAll();
 		int GetHighestID(PathType type = static_cast<PathType>(-1));
 		void SetForDeletion(Node* node);
@@ -70,14 +70,27 @@ namespace Container
 		Node* GetRandomNode(PathType type, float min_z, float max_z);
 		Node* GetRandomNodeInArea(float min_x, float min_y, float max_x, float max_y, PathType type, float min_z, float max_z);
 		void RebuildTypeIndices();
+		void MarkComponentsDirty();
+		int GetConnectedComponent(Node* node, PathType type = PATH_TYPE_VEHICLE);
 	}
 
 	namespace Connections
 	{
+		struct RoadCandidate
+		{
+			Connection* conn = nullptr;
+			float qx = 0.0f;
+			float qy = 0.0f;
+			float qz = 0.0f;
+			float dist2d_sq = 0.0f;
+		};
+
 		int Add(int sourceID, int targetID, float road_width = 8.0f, int left_lanes = 1, int right_lanes = 1, bool one_way = false);
+		bool Exists(int sourceID, int targetID);
 		void Delete(Connection* connection);
 		Connection* Find(int id);
 		bool FindClosestRoadPoint(float x, float y, float z, float& out_x, float& out_y, float& out_z, float& out_angle, float& out_road_width, int& out_conn_id, PathType type = PATH_TYPE_VEHICLE);
+		std::vector<RoadCandidate> FindRoadCandidates(float x, float y, float z, float max_radius, PathType type = PATH_TYPE_VEHICLE, int required_component = -1);
 		const std::unordered_map<int, Connection*>& GetAll();
 		int GetHighestID();
 
@@ -108,7 +121,6 @@ namespace Container
 		int Add(Path* path);
 		void Delete(Path* path);
 		Path* Find(int id);
-		Path* FindLocked(int id);
 		std::unordered_map<int, Path*> GetAll();
 		int GetHighestID();
 		void ProcessTick();

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include "connection.h"
 #include "node.h"
@@ -6,7 +7,7 @@ Connection::Connection(const int id, Node* source, Node* target, const float dis
 	: id_(id), source_(source), target_(target), distance_(distance),
 	  road_width_(road_width), left_lanes_(left_lanes), right_lanes_(right_lanes), one_way_(one_way),
 	  blocked_(false), traffic_multiplier_(1.0f), has_toll_(false), toll_cost_(0),
-	  is_paved_(road_width >= 5.5f), speed_limit_(0.0f), max_height_(0.0f)
+	  is_paved_((source != nullptr && source->getType() == PATH_TYPE_VEHICLE) || road_width >= 5.5f), speed_limit_(0.0f), max_height_(0.0f)
 {
 }
 
@@ -97,17 +98,61 @@ void Connection::setPaved(const bool paved)
 	is_paved_.store(paved, std::memory_order_relaxed);
 }
 
+int Connection::getTravelLanes() const
+{
+	if (!one_way_)
+	{
+		return (right_lanes_ > 0) ? right_lanes_ : 1;
+	}
+	if (isWrongWay())
+	{
+		return (left_lanes_ > 0) ? left_lanes_ : 1;
+	}
+	return (right_lanes_ > 0) ? right_lanes_ : 1;
+}
+
+float Connection::getCenterGap() const
+{
+	if (!one_way_ && left_lanes_ > 0 && right_lanes_ > 0)
+	{
+		const float total_lane_width = static_cast<float>(left_lanes_ + right_lanes_) * GTA_LANE_WIDTH;
+		const float gap = (road_width_ - total_lane_width) * 0.5f;
+		return (gap > 0.0f) ? gap : 0.0f;
+	}
+	return 0.0f;
+}
+
+float Connection::getLaneOffset(const int lane_index) const
+{
+	if (source_ != nullptr && source_->getType() != PATH_TYPE_VEHICLE)
+	{
+		return 0.0f;
+	}
+
+	const int n = std::max(1, getTravelLanes());
+	const int clamped_idx = std::clamp(lane_index, 0, n - 1);
+
+	if (!one_way_ && left_lanes_ > 0 && right_lanes_ > 0)
+	{
+		return getCenterGap() + (0.5f + static_cast<float>(clamped_idx)) * GTA_LANE_WIDTH;
+	}
+
+	return (0.5f - 0.5f * static_cast<float>(n) + static_cast<float>(clamped_idx)) * GTA_LANE_WIDTH;
+}
+
 RoadClass Connection::getRoadClass() const
 {
-	if ((target_ != nullptr && (target_->getFlags() & NODE_FLAG_HIGHWAY) != 0) || (road_width_ >= 14.0f && right_lanes_ >= 2))
+	const int lanes = getTravelLanes();
+	const float gap = getCenterGap();
+	if ((target_ != nullptr && (target_->getFlags() & NODE_FLAG_HIGHWAY) != 0) || lanes >= 3)
 	{
 		return ROAD_CLASS_HIGHWAY;
 	}
-	if (right_lanes_ >= 2 || road_width_ >= 10.0f)
+	if (lanes >= 2 || gap > 0.0f)
 	{
 		return ROAD_CLASS_AVENUE;
 	}
-	if (road_width_ < 5.5f)
+	if (one_way_ && lanes <= 1 && road_width_ <= GTA_LANE_WIDTH)
 	{
 		return ROAD_CLASS_ALLEY;
 	}
@@ -177,11 +222,7 @@ bool Connection::getLanePosition(const int lane_index, float& out_x, float& out_
 	const auto perp_x = dy;
 	const auto perp_y = -dx;
 
-	const auto lanes = (right_lanes_ > 0) ? right_lanes_ : 1;
-	const auto total_lanes = (left_lanes_ > 0 ? left_lanes_ : 1) + lanes;
-	const auto lane_width = road_width_ / total_lanes;
-
-	const auto offset = (lane_width * 0.5f) + (lane_index * lane_width);
+	const auto offset = getLaneOffset(lane_index);
 
 	out_x = x2 + (perp_x * offset);
 	out_y = y2 + (perp_y * offset);

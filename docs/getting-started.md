@@ -317,4 +317,4 @@ Explore the rest of the documentation suite to leverage the full power of GPS Pl
 * **[Pathfinding & Routing](pathfinding-and-routing.md):** Deep-dive into traffic multipliers, roadblock detours, safe-routing, eco-routing, tolls, and multi-stop TSP optimization.
 * **[Navigation & Geometry](navigation-and-geometry.md):** Implement real-time turn-by-turn HUD guidance, roundabout detection, and Catmull-Rom spline path smoothing.
 * **[AI & Traffic Simulation](ai-and-traffic-simulation.md):** Build autonomous NPC driving bots using Pure Pursuit steering and police pursuit intercept AI.
-* **[Complete API Reference](api-reference.md):** Consult the full signature directory of all 105 natives.
+* **[Complete API Reference](api-reference.md):** Consult the full signature directory of all 113 natives.

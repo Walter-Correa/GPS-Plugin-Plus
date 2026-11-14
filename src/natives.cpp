@@ -55,9 +55,377 @@ namespace Natives
 		return cls >= ROAD_CLASS_ALLEY && cls <= ROAD_CLASS_HIGHWAY;
 	}
 
-	static inline Path* FindPathLocked(int id)
+	inline float GetAngleDelta(float a, float b)
 	{
-		return Container::Paths::FindLocked(id);
+		float diff = std::abs(a - b);
+		while (diff > 180.0f) diff = std::abs(diff - 360.0f);
+		return diff;
+	}
+
+	struct LegalRoadInfo
+	{
+		float ux;
+		float uy;
+		float angle;
+		int side_lanes;
+		float edge_offset;
+		float max_offroad_dist;
+		bool in_median;
+		bool is_vehicle;
+	};
+
+	bool ComputeLegalRoadInfo(const Connection* conn, float x, float y, LegalRoadInfo& out)
+	{
+		if (conn == nullptr) return false;
+		const Node* src = conn->getSource();
+		const Node* tgt = conn->getTarget();
+		if (src == nullptr || tgt == nullptr) return false;
+
+		const float ax = src->getX(), ay = src->getY();
+		const float bx = tgt->getX(), by = tgt->getY();
+		const float vx = bx - ax, vy = by - ay;
+		const float len = std::sqrt(vx * vx + vy * vy);
+		if (len <= 0.0001f) return false;
+
+		const float ux = vx / len;
+		const float uy = vy / len;
+		const float forward_angle = src->getAngleFromNode(const_cast<Node*>(tgt), true);
+		const float reverse_angle = const_cast<Node*>(tgt)->getAngleFromNode(const_cast<Node*>(src), true);
+
+		out.is_vehicle = (src->getType() == PATH_TYPE_VEHICLE);
+		out.in_median = false;
+
+		if (conn->isOneWay())
+		{
+			const bool legal_fwd = !conn->isWrongWay();
+			out.ux = legal_fwd ? ux : -ux;
+			out.uy = legal_fwd ? uy : -uy;
+			out.angle = legal_fwd ? forward_angle : reverse_angle;
+			out.side_lanes = std::max(1, conn->getTravelLanes());
+			out.edge_offset = out.is_vehicle ? (0.5f * static_cast<float>(out.side_lanes) * GTA_LANE_WIDTH) : (0.5f * conn->getRoadWidth());
+		}
+		else
+		{
+			const float cross = vx * (y - ay) - vy * (x - ax);
+			const float perp_dist = std::abs(cross) / len;
+			const float gap = conn->getCenterGap();
+			out.in_median = (gap > 0.0f && perp_dist < gap);
+
+			if (cross <= 0.0f)
+			{
+				out.ux = ux;
+				out.uy = uy;
+				out.angle = forward_angle;
+				out.side_lanes = std::max(1, conn->getRightLanes());
+			}
+			else
+			{
+				out.ux = -ux;
+				out.uy = -uy;
+				out.angle = reverse_angle;
+				out.side_lanes = std::max(1, conn->getLeftLanes());
+			}
+			out.edge_offset = out.is_vehicle ? (gap + static_cast<float>(out.side_lanes) * GTA_LANE_WIDTH) : (0.5f * conn->getRoadWidth());
+		}
+
+		out.max_offroad_dist = out.edge_offset + 4.0f;
+		return true;
+	}
+
+	struct LaneSeg
+	{
+		float sx, sy, sz;
+		float ex, ey, ez;
+		float ux, uy;
+		float d;
+		float raw_sx, raw_sy, raw_ex, raw_ey;
+		float raw_len;
+		const Connection* conn;
+	};
+
+	static bool BuildPathLaneSegments(const Path* path, int build_start, std::vector<LaneSeg>& out_segs, float max_len_m = -1.0f, bool* out_reaches_end = nullptr)
+	{
+		if (path == nullptr) return false;
+		const auto& nodes = path->getNodes();
+		const int count = static_cast<int>(nodes.size());
+		if (count < 2) return false;
+
+		const int num_segs = count - 1;
+		build_start = std::clamp(build_start, 0, num_segs - 1);
+
+		out_segs.clear();
+		const int remaining_segs = num_segs - build_start;
+		out_segs.reserve((max_len_m > 0.0f) ? std::min(remaining_segs, 32) : remaining_segs);
+
+		float accum_len = 0.0f;
+		int built_end = build_start;
+		for (int k = build_start; k < num_segs; ++k)
+		{
+			Node* a = nodes[k];
+			Node* b = nodes[k + 1];
+			LaneSeg s{};
+			s.sz = a->getZ();
+			s.ez = b->getZ();
+
+			const float vx = b->getX() - a->getX();
+			const float vy = b->getY() - a->getY();
+			const float len = std::sqrt(vx * vx + vy * vy);
+			s.raw_len = len;
+			if (len > 0.0001f)
+			{
+				s.ux = vx / len;
+				s.uy = vy / len;
+			}
+
+			Connection* conn = nullptr;
+			for (auto c : a->getConnections())
+			{
+				if (c != nullptr && c->getSource() == a && c->getTarget() == b)
+				{
+					conn = c;
+					break;
+				}
+			}
+
+			s.d = (conn != nullptr) ? conn->getLaneOffset(conn->getTravelLanes() - 1) : 0.0f;
+			s.conn = conn;
+			const float rx = s.uy;
+			const float ry = -s.ux;
+			s.raw_sx = a->getX() + rx * s.d;
+			s.raw_sy = a->getY() + ry * s.d;
+			s.raw_ex = b->getX() + rx * s.d;
+			s.raw_ey = b->getY() + ry * s.d;
+			s.sx = s.raw_sx;
+			s.sy = s.raw_sy;
+			s.ex = s.raw_ex;
+			s.ey = s.raw_ey;
+			out_segs.push_back(s);
+
+			accum_len += len;
+			built_end = k + 1;
+			if (max_len_m > 0.0f && static_cast<int>(out_segs.size()) >= 8 && accum_len > max_len_m)
+			{
+				break;
+			}
+		}
+
+		const int built_count = static_cast<int>(out_segs.size());
+		constexpr float kCos10Deg = 0.984807753f;
+		for (int i = 0; i < built_count - 1; ++i)
+		{
+			LaneSeg& s1 = out_segs[i];
+			LaneSeg& s2 = out_segs[i + 1];
+			if (s1.raw_len <= 0.0001f || s2.raw_len <= 0.0001f)
+			{
+				continue;
+			}
+
+			const float cos_ang = std::clamp(s1.ux * s2.ux + s1.uy * s2.uy, -1.0f, 1.0f);
+			if (cos_ang > kCos10Deg)
+			{
+				const float jx = 0.5f * (s1.raw_ex + s2.raw_sx);
+				const float jy = 0.5f * (s1.raw_ey + s2.raw_sy);
+				s1.ex = jx;
+				s1.ey = jy;
+				s2.sx = jx;
+				s2.sy = jy;
+				continue;
+			}
+
+			const float cross_u = s1.ux * s2.uy - s1.uy * s2.ux;
+			if (std::abs(cross_u) > 0.0001f)
+			{
+				const float dx = s2.raw_sx - s1.raw_sx;
+				const float dy = s2.raw_sy - s1.raw_sy;
+				const float t1 = (dx * s2.uy - dy * s2.ux) / cross_u;
+				const float mx = s1.raw_sx + t1 * s1.ux;
+				const float my = s1.raw_sy + t1 * s1.uy;
+
+				const Node* joint_node = nodes[build_start + i + 1];
+				const float miter_dist = std::hypot(mx - joint_node->getX(), my - joint_node->getY());
+				const float max_d = std::max(std::abs(s1.d), std::abs(s2.d));
+				const float miter_limit = 2.5f * max_d;
+
+				const bool valid_s1 = ((mx - s1.sx) * s1.ux + (my - s1.sy) * s1.uy) > 0.05f;
+				const bool valid_s2 = ((s2.raw_ex - mx) * s2.ux + (s2.raw_ey - my) * s2.uy) > 0.05f;
+
+				if (miter_dist <= miter_limit + 0.001f && valid_s1 && valid_s2)
+				{
+					s1.ex = mx;
+					s1.ey = my;
+					s2.sx = mx;
+					s2.sy = my;
+				}
+			}
+		}
+
+		const bool reaches_end = (built_end == num_segs);
+		if (out_reaches_end != nullptr)
+		{
+			*out_reaches_end = reaches_end;
+		}
+
+		if (reaches_end && path->hasStopPoint() && !out_segs.empty())
+		{
+			LaneSeg& last = out_segs.back();
+			float stop_x = 0.0f, stop_y = 0.0f, stop_z = 0.0f, seg_dist = 0.0f;
+			path->getStopPoint(stop_x, stop_y, stop_z, seg_dist);
+			const float forward_proj = (stop_x - last.sx) * last.ux + (stop_y - last.sy) * last.uy;
+			if (forward_proj > 0.05f)
+			{
+				last.ex = stop_x;
+				last.ey = stop_y;
+			}
+			else
+			{
+				last.ex = last.sx + last.ux * 0.05f;
+				last.ey = last.sy + last.uy * 0.05f;
+			}
+			last.ez = stop_z;
+		}
+
+		return true;
+	}
+
+	static void ProjectOntoLaneSegments(const std::vector<LaneSeg>& segs, int build_start, float px, float py, int min_seg, int max_seg, int& out_best_idx, float& out_best_t, float& out_best_qx, float& out_best_qy, float& out_lat_err)
+	{
+		const int built_count = static_cast<int>(segs.size());
+		const int clamped_min = std::clamp(min_seg - build_start, 0, built_count - 1);
+		const int clamped_max = std::clamp(max_seg - build_start, clamped_min, built_count - 1);
+
+		out_best_idx = clamped_min;
+		out_best_t = 0.0f;
+		out_best_qx = segs[clamped_min].sx;
+		out_best_qy = segs[clamped_min].sy;
+		float min_d_sq = std::numeric_limits<float>::infinity();
+
+		for (int idx = clamped_min; idx <= clamped_max; ++idx)
+		{
+			const LaneSeg& s = segs[idx];
+			const float abx = s.ex - s.sx;
+			const float aby = s.ey - s.sy;
+			const float ab_len_sq = abx * abx + aby * aby;
+
+			float t = 0.0f;
+			if (ab_len_sq > 0.0001f)
+			{
+				t = std::clamp(((px - s.sx) * abx + (py - s.sy) * aby) / ab_len_sq, 0.0f, 1.0f);
+			}
+
+			const float qx = s.sx + t * abx;
+			const float qy = s.sy + t * aby;
+			const float d_sq = (px - qx) * (px - qx) + (py - qy) * (py - qy);
+			if (d_sq < min_d_sq)
+			{
+				min_d_sq = d_sq;
+				out_best_idx = idx;
+				out_best_t = t;
+				out_best_qx = qx;
+				out_best_qy = qy;
+			}
+		}
+
+		const LaneSeg& bs = segs[out_best_idx];
+		if (bs.ux != 0.0f || bs.uy != 0.0f)
+		{
+			out_lat_err = (px - out_best_qx) * bs.uy - (py - out_best_qy) * bs.ux;
+		}
+		else
+		{
+			out_lat_err = 0.0f;
+		}
+	}
+
+	static void WalkLanePolylineForward(const std::vector<LaneSeg>& segs, int best_idx, float best_t, float target_dist, float& out_x, float& out_y, float& out_z, float& out_covered)
+	{
+		const int built_count = static_cast<int>(segs.size());
+		out_x = segs.back().ex;
+		out_y = segs.back().ey;
+		out_z = segs.back().ez;
+
+		const float requested = std::max(0.0f, target_dist);
+		float remain = requested;
+		for (int idx = best_idx; idx < built_count; ++idx)
+		{
+			const LaneSeg& s = segs[idx];
+			const float start_t = (idx == best_idx) ? best_t : 0.0f;
+			const float ax = s.sx + start_t * (s.ex - s.sx);
+			const float ay = s.sy + start_t * (s.ey - s.sy);
+			const float az = s.sz + start_t * (s.ez - s.sz);
+			const float seg_len = std::hypot(s.ex - ax, s.ey - ay);
+
+			if (remain <= seg_len)
+			{
+				const float frac = (seg_len > 0.0001f) ? (remain / seg_len) : 0.0f;
+				out_x = ax + frac * (s.ex - ax);
+				out_y = ay + frac * (s.ey - ay);
+				out_z = az + frac * (s.ez - az);
+				out_covered = requested;
+				return;
+			}
+			remain -= seg_len;
+
+			if (idx + 1 < built_count)
+			{
+				const LaneSeg& next_s = segs[idx + 1];
+				const float gap_dx = next_s.sx - s.ex;
+				const float gap_dy = next_s.sy - s.ey;
+				const float gap_len = std::hypot(gap_dx, gap_dy);
+				if (gap_len > 0.001f)
+				{
+					if (remain <= gap_len)
+					{
+						const float frac = remain / gap_len;
+						out_x = s.ex + frac * gap_dx;
+						out_y = s.ey + frac * gap_dy;
+						out_z = s.ez + frac * (next_s.sz - s.ez);
+						out_covered = requested;
+						return;
+					}
+					remain -= gap_len;
+				}
+			}
+		}
+
+		out_covered = requested - remain;
+	}
+
+	bool ComputePathLaneTarget(const Path* path, float px, float py, float lookahead, int min_seg, int max_seg, int& out_best_seg, float& out_tx, float& out_ty, float& out_tz, float& out_lat_err)
+	{
+		if (path == nullptr) return false;
+		const auto& nodes = path->getNodes();
+		const int count = static_cast<int>(nodes.size());
+		if (count <= 0) return false;
+
+		if (count == 1)
+		{
+			out_best_seg = 0;
+			out_tx = nodes[0]->getX();
+			out_ty = nodes[0]->getY();
+			out_tz = nodes[0]->getZ();
+			out_lat_err = 0.0f;
+			return true;
+		}
+
+		const int num_segs = count - 1;
+		min_seg = std::clamp(min_seg, 0, num_segs - 1);
+		max_seg = std::clamp(max_seg, min_seg, num_segs - 1);
+		const int build_start = std::max(0, min_seg - 1);
+
+		std::vector<LaneSeg> segs;
+		if (!BuildPathLaneSegments(path, build_start, segs, std::max(0.0f, lookahead) + 60.0f))
+		{
+			return false;
+		}
+
+		int best_idx = 0;
+		float best_t = 0.0f, best_qx = 0.0f, best_qy = 0.0f;
+		ProjectOntoLaneSegments(segs, build_start, px, py, min_seg, max_seg, best_idx, best_t, best_qx, best_qy, out_lat_err);
+		out_best_seg = build_start + best_idx;
+
+		float covered = 0.0f;
+		WalkLanePolylineForward(segs, best_idx, best_t, lookahead, out_tx, out_ty, out_tz, covered);
+		return true;
 	}
 
 
@@ -376,6 +744,22 @@ namespace Natives
 		}
 
 		return connection->isOneWay() ? 1 : 0;
+	}
+
+
+	cell AMX_NATIVE_CALL IsConnectionWrongWay(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(1);
+
+		const auto id = static_cast<int>(params[1]);
+		const auto connection = Container::Connections::Find(id);
+
+		if (connection == nullptr)
+		{
+			return false;
+		}
+
+		return connection->isWrongWay() ? 1 : 0;
 	}
 
 
@@ -769,6 +1153,51 @@ namespace Natives
 	}
 
 
+	cell AMX_NATIVE_CALL GetClosestMapNodeToPointAngle(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS_MIN(5);
+
+		const auto x = amx_ctof(params[1]), y = amx_ctof(params[2]), z = amx_ctof(params[3]);
+		const auto angle = amx_ctof(params[4]);
+		float max_dist = 20.0f;
+		auto type = PATH_TYPE_VEHICLE;
+
+		if (params[0] >= (6 * 4))
+		{
+			max_dist = amx_ctof(params[6]);
+		}
+
+		if (params[0] >= (7 * 4))
+		{
+			if (!IsValidPathType(params[7], true))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
+			type = static_cast<PathType>(params[7]);
+		}
+
+		int result = INVALID_NODE_ID;
+		{
+			std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+			const auto node = Container::Nodes::FindClosestWithAngle(x, y, z, angle, max_dist, type);
+			result = (node != nullptr) ? node->getID() : INVALID_NODE_ID;
+		}
+
+		if (result == INVALID_NODE_ID)
+		{
+			WriteRef(amx, params[5], INVALID_NODE_ID);
+			return GPS_ERROR_INVALID_NODE;
+		}
+
+		if (!WriteRef(amx, params[5], result))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		return GPS_ERROR_NONE;
+	}
+
+
 	cell AMX_NATIVE_CALL SaveMapNodesToFile(AMX* amx, cell* params)
 	{
 		CHECK_PARAMS(1);
@@ -1019,7 +1448,7 @@ namespace Natives
 		CHECK_PARAMS(1);
 
 		const auto id = static_cast<int>(params[1]);
-		const auto path = FindPathLocked(id);
+		const auto path = Container::Paths::Find(id);
 
 		return path != nullptr;
 	}
@@ -1030,7 +1459,7 @@ namespace Natives
 		CHECK_PARAMS(2);
 
 		const auto id = static_cast<int>(params[1]);
-		const auto path = FindPathLocked(id);
+		const auto path = Container::Paths::Find(id);
 
 		if (path == nullptr)
 		{
@@ -1051,7 +1480,7 @@ namespace Natives
 		CHECK_PARAMS(2);
 
 		const auto id = static_cast<int>(params[1]);
-		const auto path = FindPathLocked(id);
+		const auto path = Container::Paths::Find(id);
 
 		if (path == nullptr)
 		{
@@ -1074,7 +1503,7 @@ namespace Natives
 		CHECK_PARAMS(3);
 
 		const auto id = static_cast<int>(params[1]);
-		const auto path = FindPathLocked(id);
+		const auto path = Container::Paths::Find(id);
 
 		if (path == nullptr)
 		{
@@ -1103,7 +1532,7 @@ namespace Natives
 		CHECK_PARAMS(3);
 
 		const auto id = static_cast<int>(params[1]);
-		const auto path = FindPathLocked(id);
+		const auto path = Container::Paths::Find(id);
 
 		if (path == nullptr)
 		{
@@ -1139,7 +1568,7 @@ namespace Natives
 		CHECK_PARAMS(6);
 
 		const auto id = static_cast<int>(params[1]);
-		const auto path = FindPathLocked(id);
+		const auto path = Container::Paths::Find(id);
 
 		if (path == nullptr)
 		{
@@ -1206,7 +1635,7 @@ namespace Natives
 		CHECK_PARAMS(1);
 
 		const auto id = static_cast<int>(params[1]);
-		const auto path = FindPathLocked(id);
+		const auto path = Container::Paths::Find(id);
 
 		if (path == nullptr)
 		{
@@ -1234,6 +1663,7 @@ namespace Natives
 		}
 
 		node->setBlocked(blocked);
+		Container::Nodes::MarkComponentsDirty();
 
 		return GPS_ERROR_NONE;
 	}
@@ -1271,6 +1701,7 @@ namespace Natives
 		}
 
 		connection->setBlocked(blocked);
+		Container::Nodes::MarkComponentsDirty();
 
 		return GPS_ERROR_NONE;
 	}
@@ -1374,19 +1805,27 @@ namespace Natives
 		{
 			std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
 			success = Container::Connections::FindClosestRoadPoint(x, y, z, out_x, out_y, out_z, out_angle, out_road_width, out_conn_id, type);
+			if (success)
+			{
+				const auto conn = Container::Connections::Find(out_conn_id);
+				LegalRoadInfo road_info{};
+				if (ComputeLegalRoadInfo(conn, x, y, road_info))
+				{
+					out_angle = road_info.angle;
+					out_road_width = conn->getRoadWidth();
+					if (curb != 0)
+					{
+						const float offset = (curb == 1) ? std::max(0.0f, road_info.edge_offset - 1.3f) : (road_info.edge_offset + 1.5f);
+						out_x += offset * road_info.uy;
+						out_y += offset * (-road_info.ux);
+					}
+				}
+			}
 		}
 
 		if (!success)
 		{
 			return GPS_ERROR_INVALID_NODE;
-		}
-
-		if (curb != 0)
-		{
-			const float lateral_angle = (out_angle - 90.0f) * 3.14159265358979323846f / 180.0f;
-			const float offset = (curb == 2) ? (out_road_width / 2.0f) : ((out_road_width / 2.0f) + 1.3f);
-			out_x += offset * std::sin(-lateral_angle);
-			out_y += offset * std::cos(-lateral_angle);
 		}
 
 		if (!WriteRef(amx, params[4], out_x) ||
@@ -1423,40 +1862,20 @@ namespace Natives
 			}
 
 			const auto conn = Container::Connections::Find(out_conn_id);
-			if (conn == nullptr || conn->getSource() == nullptr || conn->getTarget() == nullptr)
+			LegalRoadInfo road_info{};
+			if (!ComputeLegalRoadInfo(conn, x, y, road_info))
 			{
 				return GPS_ERROR_INVALID_CONNECTION;
 			}
 
-			const auto src = conn->getSource();
-			const auto tgt = conn->getTarget();
-
-			const float forward_angle = src->getAngleFromNode(tgt, true);
-
-			auto get_angle_delta = [](float a, float b)
+			const float dist_2d = std::hypot(x - out_x, y - out_y);
+			if (road_info.in_median || dist_2d > road_info.max_offroad_dist)
 			{
-				float diff = std::abs(a - b);
-				while (diff > 180.0f) diff = std::abs(diff - 360.0f);
-				return diff;
-			};
-
-			if (conn->isOneWay())
-			{
-				wrong_way = (get_angle_delta(facing_angle, forward_angle) > 90.0f);
+				wrong_way = false;
 			}
 			else
 			{
-				const float cross = (tgt->getX() - src->getX()) * (y - src->getY()) - (tgt->getY() - src->getY()) * (x - src->getX());
-				if (cross <= 0.0f)
-				{
-					wrong_way = (get_angle_delta(facing_angle, forward_angle) > 90.0f);
-				}
-				else
-				{
-					float reverse_angle = forward_angle + 180.0f;
-					if (reverse_angle >= 360.0f) reverse_angle -= 360.0f;
-					wrong_way = (get_angle_delta(facing_angle, reverse_angle) > 90.0f);
-				}
+				wrong_way = (GetAngleDelta(facing_angle, road_info.angle) > 90.0f);
 			}
 		}
 
@@ -2174,62 +2593,13 @@ namespace Natives
 		}
 
 		int best_seg = 0;
-		float best_t = 0.0f;
-		float min_dist_sq = std::numeric_limits<float>::infinity();
-
-		for (int i = 0; i < count - 1; ++i)
-		{
-			const float ax = nodes[i]->getX();
-			const float ay = nodes[i]->getY();
-			const float bx = nodes[i + 1]->getX();
-			const float by = nodes[i + 1]->getY();
-
-			const float abx = bx - ax;
-			const float aby = by - ay;
-			const float apx = vx - ax;
-			const float apy = vy - ay;
-
-			const float ab_len_sq = abx * abx + aby * aby;
-			float t = 0.0f;
-			if (ab_len_sq > 0.0001f)
-			{
-				t = (apx * abx + apy * aby) / ab_len_sq;
-				t = std::max(0.0f, std::min(1.0f, t));
-			}
-
-			const float qx = ax + t * abx;
-			const float qy = ay + t * aby;
-			const float d_sq = (vx - qx) * (vx - qx) + (vy - qy) * (vy - qy);
-
-			if (d_sq < min_dist_sq)
-			{
-				min_dist_sq = d_sq;
-				best_seg = i;
-				best_t = t;
-			}
-		}
-
-		float remain = lookahead;
 		float gx = nodes.back()->getX();
 		float gy = nodes.back()->getY();
-
-		for (int i = best_seg; i < count - 1; ++i)
+		float gz = nodes.back()->getZ();
+		float lat_err = 0.0f;
 		{
-			float start_t = (i == best_seg) ? best_t : 0.0f;
-			const float ax = nodes[i]->getX() + start_t * (nodes[i + 1]->getX() - nodes[i]->getX());
-			const float ay = nodes[i]->getY() + start_t * (nodes[i + 1]->getY() - nodes[i]->getY());
-			const float bx = nodes[i + 1]->getX();
-			const float by = nodes[i + 1]->getY();
-
-			const float seg_len = std::sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay));
-			if (remain <= seg_len)
-			{
-				const float frac = (seg_len > 0.0001f) ? (remain / seg_len) : 0.0f;
-				gx = ax + frac * (bx - ax);
-				gy = ay + frac * (by - ay);
-				break;
-			}
-			remain -= seg_len;
+			std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+			ComputePathLaneTarget(path, vx, vy, lookahead, 0, count - 2, best_seg, gx, gy, gz, lat_err);
 		}
 
 		float target_bearing = std::atan2(vx - gx, gy - vy) * 180.0f / 3.14159265358979323846f;
@@ -2250,6 +2620,56 @@ namespace Natives
 
 		if (!WriteRef(amx, params[6], steer_ratio) ||
 		    !WriteRef(amx, params[7], recommended_speed))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL GetPathLaneTarget(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(9);
+
+		const auto path_id = static_cast<int>(params[1]);
+		const auto path = Container::Paths::Find(path_id);
+		if (path == nullptr) return GPS_ERROR_INVALID_PATH;
+
+		cell* idx_ptr = PawnUtils::GetAddress(amx, params[5]);
+		if (idx_ptr == nullptr) return GPS_ERROR_INVALID_PARAMS;
+
+		const float x = amx_ctof(params[2]);
+		const float y = amx_ctof(params[3]);
+		const float lookahead = amx_ctof(params[4]);
+		const int in_idx = static_cast<int>(*idx_ptr);
+
+		int out_idx = in_idx;
+		float tx = 0.0f, ty = 0.0f, tz = 0.0f, lat_err = 0.0f;
+		bool ok = false;
+		{
+			std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+			const int count = static_cast<int>(path->getNodes().size());
+			if (count > 0)
+			{
+				const int num_segs = std::max(1, count - 1);
+				const int clamped = std::clamp(in_idx, 0, num_segs - 1);
+				const int min_seg = std::max(0, clamped - 1);
+				const int max_seg = std::min(num_segs - 1, clamped + 6);
+				ok = ComputePathLaneTarget(path, x, y, lookahead, min_seg, max_seg, out_idx, tx, ty, tz, lat_err);
+			}
+		}
+
+		if (!ok)
+		{
+			return GPS_ERROR_INVALID_PATH;
+		}
+
+		*idx_ptr = static_cast<cell>(out_idx);
+		if (!WriteRef(amx, params[6], tx) ||
+		    !WriteRef(amx, params[7], ty) ||
+		    !WriteRef(amx, params[8], tz) ||
+		    !WriteRef(amx, params[9], lat_err))
 		{
 			return GPS_ERROR_INVALID_PARAMS;
 		}
@@ -2418,7 +2838,7 @@ namespace Natives
 		CHECK_PARAMS_MIN(4);
 
 		const auto path_id = static_cast<int>(params[1]);
-		const auto path = FindPathLocked(path_id);
+		const auto path = Container::Paths::Find(path_id);
 		if (path == nullptr) return GPS_ERROR_INVALID_PATH;
 
 		const int max_zones = static_cast<int>(params[3]);
@@ -2464,7 +2884,7 @@ namespace Natives
 		CHECK_PARAMS_MIN(1);
 
 		const auto path_id = static_cast<int>(params[1]);
-		const auto path = FindPathLocked(path_id);
+		const auto path = Container::Paths::Find(path_id);
 		if (path == nullptr) return GPS_ERROR_INVALID_PATH;
 
 		uint32_t ttl_ms = 60000;
@@ -3474,13 +3894,795 @@ namespace Natives
 		}
 
 		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL FindPathToPoint(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS_MIN(9);
+
+		const auto source_id = static_cast<int>(params[1]);
+		const float x = amx_ctof(params[2]);
+		const float y = amx_ctof(params[3]);
+		const float z = amx_ctof(params[4]);
+		const float max_road_dist = (params[0] >= (10 * 4)) ? amx_ctof(params[10]) : 150.0f;
+
+		auto type = PATH_TYPE_VEHICLE;
+		if (params[0] >= (11 * 4))
+		{
+			if (!IsValidPathType(params[11], true))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
+			type = static_cast<PathType>(params[11]);
+		}
+
+		auto pref = ROUTE_PREF_SHORTEST;
+		if (params[0] >= (12 * 4))
+		{
+			if (!IsValidRoutePref(params[12]))
+			{
+				return GPS_ERROR_INVALID_PARAMS;
+			}
+			pref = static_cast<RoutePreference>(params[12]);
+		}
+
+		std::vector<Node*> best_nodes;
+		float total_len = 0.0f;
+		float stop_x = x, stop_y = y, stop_z = z;
+		float dist_to_road = -1.0f;
+		bool source_invalid = false;
+		bool found = false;
+
+		{
+			std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+			Node* source = Container::Nodes::Find(source_id);
+			if (source == nullptr || source->isBlocked())
+			{
+				source_invalid = true;
+			}
+			else
+			{
+				const int src_comp = Container::Nodes::GetConnectedComponent(source, type);
+				const auto candidates = Container::Connections::FindRoadCandidates(x, y, z, max_road_dist, type, src_comp);
+
+				auto try_candidate = [&](const Container::Connections::RoadCandidate& cand, bool forbid_reverse) -> bool
+				{
+					Connection* edge = cand.conn;
+					Node* s = edge->getSource();
+					Node* t = edge->getTarget();
+
+					const float vx = t->getX() - s->getX();
+					const float vy = t->getY() - s->getY();
+					const float edge_len = std::hypot(vx, vy);
+					if (edge_len <= 0.0001f)
+					{
+						return false;
+					}
+
+					const float t_proj = std::clamp(
+						((cand.qx - s->getX()) * vx + (cand.qy - s->getY()) * vy) / (edge_len * edge_len),
+						0.0f, 1.0f);
+
+					Connection* rev_edge = nullptr;
+					if (forbid_reverse)
+					{
+						for (Connection* c : t->getConnections())
+						{
+							if (c != nullptr && c->getSource() == t && c->getTarget() == s)
+							{
+								rev_edge = c;
+								break;
+							}
+						}
+					}
+
+					std::vector<Node*> prefix_nodes;
+					float prefix_len = 0.0f;
+					if (!Pathfinder::FindPathNodes(source, s, prefix_nodes, prefix_len, type, pref,
+						VEHICLE_CAT_STANDARD, 0.0f, 0.0f, false, false, 0.0f, false, rev_edge))
+					{
+						return false;
+					}
+
+					prefix_nodes.push_back(t);
+					best_nodes = std::move(prefix_nodes);
+					total_len = prefix_len + t_proj * edge->getDistance();
+
+					const float ux = vx / edge_len;
+					const float uy = vy / edge_len;
+					const float d_lane = edge->getLaneOffset(edge->getTravelLanes() - 1);
+					stop_x = cand.qx + uy * d_lane;
+					stop_y = cand.qy - ux * d_lane;
+					stop_z = cand.qz;
+					dist_to_road = std::sqrt(cand.dist2d_sq);
+					return true;
+				};
+
+				const size_t max_tries = std::min<size_t>(candidates.size(), 12);
+				for (size_t i = 0; i < max_tries && !found; ++i)
+				{
+					found = try_candidate(candidates[i], true);
+				}
+				if (!found)
+				{
+					for (size_t i = 0; i < max_tries && !found; ++i)
+					{
+						found = try_candidate(candidates[i], false);
+					}
+				}
+			}
+		}
+
+		if (source_invalid)
+		{
+			WriteRef(amx, params[5], INVALID_PATH_ID);
+			return GPS_ERROR_INVALID_NODE;
+		}
+
+		if (!found)
+		{
+			WriteRef(amx, params[5], INVALID_PATH_ID);
+			return GPS_ERROR_INVALID_PATH;
+		}
+
+		Path* path = Container::Paths::Register(best_nodes, total_len, amx);
+		if (path == nullptr)
+		{
+			WriteRef(amx, params[5], INVALID_PATH_ID);
+			return GPS_ERROR_INTERNAL;
+		}
+
+		const Node* s = best_nodes[best_nodes.size() - 2];
+		const Node* t = best_nodes[best_nodes.size() - 1];
+		const float seg_dist = std::hypot(stop_x - s->getX(), stop_y - s->getY());
+		(void)t;
+		path->setStopPoint(stop_x, stop_y, stop_z, std::max(0.5f, seg_dist));
+
+		if (!WriteRef(amx, params[5], path->getID()) ||
+		    !WriteRef(amx, params[6], stop_x) ||
+		    !WriteRef(amx, params[7], stop_y) ||
+		    !WriteRef(amx, params[8], stop_z) ||
+		    !WriteRef(amx, params[9], dist_to_road))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL IsPathStopReached(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(4);
+
+		const int path_id = static_cast<int>(params[1]);
+		const int path_index = static_cast<int>(params[2]);
+		const float x = amx_ctof(params[3]);
+		const float y = amx_ctof(params[4]);
+
+		const auto path = Container::Paths::Find(path_id);
+		if (path == nullptr)
+		{
+			return 0;
+		}
+
+		std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+		const auto& nodes = path->getNodes();
+		const int count = static_cast<int>(nodes.size());
+		if (count <= 0)
+		{
+			return 0;
+		}
+
+		if (count == 1)
+		{
+			float end_x = nodes[0]->getX(), end_y = nodes[0]->getY(), end_z = 0.0f, seg_d = 0.0f;
+			if (path->hasStopPoint())
+			{
+				path->getStopPoint(end_x, end_y, end_z, seg_d);
+			}
+			return (std::hypot(x - end_x, y - end_y) <= 8.0f) ? 1 : 0;
+		}
+
+		const int num_segs = count - 1;
+		const int clamped_idx = std::clamp(path_index, 0, num_segs - 1);
+		const int build_start = std::max(0, clamped_idx - 1);
+
+		std::vector<LaneSeg> segs;
+		bool reaches_end = false;
+		if (!BuildPathLaneSegments(path, build_start, segs, 60.0f, &reaches_end) || segs.empty())
+		{
+			return 0;
+		}
+		if (!reaches_end)
+		{
+			return 0;
+		}
+
+		const int max_search = std::min(num_segs - 1, clamped_idx + 8);
+		int best_idx = 0;
+		float best_t = 0.0f, best_qx = 0.0f, best_qy = 0.0f, lat_err = 0.0f;
+		ProjectOntoLaneSegments(segs, build_start, x, y, clamped_idx, max_search, best_idx, best_t, best_qx, best_qy, lat_err);
+
+		const float end_x = segs.back().ex;
+		const float end_y = segs.back().ey;
+		const float direct_dist = std::hypot(x - end_x, y - end_y);
+		const float reach_radius = path->hasStopPoint() ? 6.0f : 10.0f;
+		if (direct_dist <= reach_radius)
+		{
+			return 1;
+		}
+
+		const int last_idx = static_cast<int>(segs.size()) - 1;
+		if (best_idx == last_idx && std::abs(lat_err) <= 12.0f)
+		{
+			const LaneSeg& last = segs.back();
+			const float rem_len = std::hypot(last.ex - last.sx, last.ey - last.sy) * (1.0f - best_t);
+			if (best_t >= 0.99f || rem_len <= 5.0f)
+			{
+				return 1;
+			}
+		}
+
+		return 0;
+	}
+
+
+	static float ComputeCurveSpeedMs(
+		const float ax, const float ay,
+		const float bx, const float by,
+		const float cx, const float cy,
+		const float v_max_ms,
+		const float min_curve_ms)
+	{
+		const float abx = bx - ax, aby = by - ay;
+		const float bcx = cx - bx, bcy = cy - by;
+		const float acx = cx - ax, acy = cy - ay;
+		const float a = std::hypot(abx, aby);
+		const float b = std::hypot(bcx, bcy);
+		const float c = std::hypot(acx, acy);
+		if (a < 0.5f || b < 0.5f)
+		{
+			return v_max_ms;
+		}
+
+		const float dot = abx * bcx + aby * bcy;
+		if (dot < -0.5f * a * b)
+		{
+			return min_curve_ms;
+		}
+
+		const float cross = std::abs(abx * acy - aby * acx);
+		const float kappa = (2.0f * cross) / std::max(a * b * c, 1e-4f);
+		if (kappa > 0.002f)
+		{
+			return std::max(min_curve_ms, std::sqrt(CURVE_MAX_LATERAL_ACCEL / kappa));
+		}
+		return v_max_ms;
+	}
+
+	cell AMX_NATIVE_CALL GetPathSpeedAdvice(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(7);
+
+		const int path_id = static_cast<int>(params[1]);
+		const int path_index = static_cast<int>(params[2]);
+		const float x = amx_ctof(params[3]);
+		const float y = amx_ctof(params[4]);
+		const float max_speed_kmh = std::max(0.0f, amx_ctof(params[5]));
+
+		const auto path = Container::Paths::Find(path_id);
+		if (path == nullptr)
+		{
+			return GPS_ERROR_INVALID_PATH;
+		}
+
+		float out_target_kmh = max_speed_kmh;
+		float out_constraint_dist = -1.0f;
+		int err = GPS_ERROR_NONE;
+
+		{
+			std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+			const auto& nodes = path->getNodes();
+			const int count = static_cast<int>(nodes.size());
+			if (count <= 0)
+			{
+				err = GPS_ERROR_INVALID_PATH;
+			}
+			else if (count > 1)
+			{
+				const int num_segs = count - 1;
+				const int clamped_idx = std::clamp(path_index, 0, num_segs - 1);
+				const int build_start = std::max(0, clamped_idx - 1);
+				const float v_max_ms = max_speed_kmh / 3.6f;
+				const float d_brake_horizon = std::max(40.0f, (v_max_ms * v_max_ms) / (2.0f * CURVE_MAX_BRAKE_DECEL) + 25.0f);
+
+				std::vector<LaneSeg> segs;
+				bool reaches_end = false;
+				if (!BuildPathLaneSegments(path, build_start, segs, d_brake_horizon + CURVE_ARC_WINDOW + 30.0f, &reaches_end) || segs.empty())
+				{
+					err = GPS_ERROR_INTERNAL;
+				}
+				else
+				{
+					const int max_search = std::min(num_segs - 1, clamped_idx + 8);
+					int best_idx = 0;
+					float best_t = 0.0f, best_qx = 0.0f, best_qy = 0.0f, lat_err = 0.0f;
+					ProjectOntoLaneSegments(segs, build_start, x, y, clamped_idx, max_search, best_idx, best_t, best_qx, best_qy, lat_err);
+
+					struct PolyPt { float x, y, s; };
+					std::vector<PolyPt> poly;
+					float cum_s = 0.0f;
+
+					const LaneSeg& start_seg = segs[best_idx];
+					const float cur_x = start_seg.sx + best_t * (start_seg.ex - start_seg.sx);
+					const float cur_y = start_seg.sy + best_t * (start_seg.ey - start_seg.sy);
+					poly.push_back({ cur_x, cur_y, 0.0f });
+
+					for (int idx = best_idx; idx < static_cast<int>(segs.size()); ++idx)
+					{
+						const LaneSeg& s = segs[idx];
+						if (idx > best_idx)
+						{
+							const float gap = std::hypot(s.sx - poly.back().x, s.sy - poly.back().y);
+							if (gap > 0.01f)
+							{
+								cum_s += gap;
+								poly.push_back({ s.sx, s.sy, cum_s });
+							}
+						}
+
+						const float seg_end_dist = std::hypot(s.ex - poly.back().x, s.ey - poly.back().y);
+						if (seg_end_dist > 0.01f)
+						{
+							cum_s += seg_end_dist;
+							poly.push_back({ s.ex, s.ey, cum_s });
+						}
+
+						if (cum_s >= d_brake_horizon + CURVE_ARC_WINDOW)
+						{
+							break;
+						}
+					}
+
+					auto sample_at_s = [&poly](const float target_s, float& ox, float& oy)
+					{
+						if (target_s <= 0.0f || poly.size() == 1)
+						{
+							ox = poly.front().x;
+							oy = poly.front().y;
+							return;
+						}
+						for (size_t i = 0; i + 1 < poly.size(); ++i)
+						{
+							if (target_s <= poly[i + 1].s)
+							{
+								const float ds = poly[i + 1].s - poly[i].s;
+								const float frac = (ds > 0.0001f) ? ((target_s - poly[i].s) / ds) : 0.0f;
+								ox = poly[i].x + frac * (poly[i + 1].x - poly[i].x);
+								oy = poly[i].y + frac * (poly[i + 1].y - poly[i].y);
+								return;
+							}
+						}
+						ox = poly.back().x;
+						oy = poly.back().y;
+					};
+
+					float best_target_ms = v_max_ms;
+					float best_constraint_dist = -1.0f;
+
+					const float total_poly_len = poly.back().s;
+					const float eval_limit = std::min(total_poly_len, d_brake_horizon);
+					const float min_curve_ms = std::min(v_max_ms, CURVE_MIN_SPEED_KMH / 3.6f);
+
+					std::vector<float> sample_distances;
+					for (float s_val = 0.0f; s_val <= eval_limit; s_val += 3.0f)
+					{
+						sample_distances.push_back(s_val);
+					}
+					for (const auto& pt : poly)
+					{
+						if (pt.s > 0.0f && pt.s <= eval_limit)
+						{
+							sample_distances.push_back(pt.s);
+						}
+					}
+
+					for (const float s_c : sample_distances)
+					{
+						const float s_prev = std::max(0.0f, s_c - CURVE_ARC_WINDOW);
+						const float s_next = std::min(total_poly_len, s_c + CURVE_ARC_WINDOW);
+						if ((s_c - s_prev) < 1.0f || (s_next - s_c) < 1.0f)
+						{
+							continue;
+						}
+
+						float ax = 0.0f, ay = 0.0f, bx = 0.0f, by = 0.0f, cx = 0.0f, cy = 0.0f;
+						sample_at_s(s_prev, ax, ay);
+						sample_at_s(s_c, bx, by);
+						sample_at_s(s_next, cx, cy);
+
+						const float v_curve_ms = ComputeCurveSpeedMs(ax, ay, bx, by, cx, cy, v_max_ms, min_curve_ms);
+
+						if (v_curve_ms < v_max_ms)
+						{
+							const float v_allowed_ms = std::sqrt(v_curve_ms * v_curve_ms + 2.0f * CURVE_MAX_BRAKE_DECEL * s_c);
+							if (v_allowed_ms < best_target_ms)
+							{
+								best_target_ms = v_allowed_ms;
+								best_constraint_dist = s_c;
+							}
+						}
+					}
+
+					if (reaches_end && path->hasStopPoint() && total_poly_len <= d_brake_horizon)
+					{
+						const float stop_brake_dist = std::max(0.0f, total_poly_len - 2.0f);
+						const float v_stop_ms = std::sqrt(2.0f * CURVE_MAX_BRAKE_DECEL * stop_brake_dist);
+						if (v_stop_ms < best_target_ms)
+						{
+							best_target_ms = v_stop_ms;
+							best_constraint_dist = total_poly_len;
+						}
+					}
+
+					out_target_kmh = std::clamp(best_target_ms * 3.6f, 0.0f, max_speed_kmh);
+					out_constraint_dist = best_constraint_dist;
+				}
+			}
+		}
+
+		if (err != GPS_ERROR_NONE)
+		{
+			return err;
+		}
+
+		if (!WriteRef(amx, params[6], out_target_kmh) ||
+		    !WriteRef(amx, params[7], out_constraint_dist))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL GetPathRoadProfile(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS(7);
+
+		const int path_id = static_cast<int>(params[1]);
+		const int path_index = static_cast<int>(params[2]);
+		const float x = amx_ctof(params[3]);
+		const float y = amx_ctof(params[4]);
+		const float ahead_dist = std::max(5.0f, amx_ctof(params[5]));
+
+		const auto path = Container::Paths::Find(path_id);
+		if (path == nullptr)
+		{
+			return GPS_ERROR_INVALID_PATH;
+		}
+
+		float out_road_z = 0.0f;
+		float out_grade_ahead = 0.0f;
+		int err = GPS_ERROR_NONE;
+
+		{
+			std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+			const auto& nodes = path->getNodes();
+			const int count = static_cast<int>(nodes.size());
+			if (count <= 0)
+			{
+				err = GPS_ERROR_INVALID_PATH;
+			}
+			else if (count == 1)
+			{
+				out_road_z = nodes[0]->getZ();
+				out_grade_ahead = 0.0f;
+			}
+			else
+			{
+				const int num_segs = count - 1;
+				const int clamped_idx = std::clamp(path_index, 0, num_segs - 1);
+				const int build_start = std::max(0, clamped_idx - 1);
+
+				std::vector<LaneSeg> segs;
+				if (!BuildPathLaneSegments(path, build_start, segs, ahead_dist + 60.0f) || segs.empty())
+				{
+					err = GPS_ERROR_INTERNAL;
+				}
+				else
+				{
+					const int max_search = std::min(num_segs - 1, clamped_idx + 8);
+					int best_idx = 0;
+					float best_t = 0.0f, best_qx = 0.0f, best_qy = 0.0f, lat_err = 0.0f;
+					ProjectOntoLaneSegments(segs, build_start, x, y, clamped_idx, max_search, best_idx, best_t, best_qx, best_qy, lat_err);
+
+					const LaneSeg& cur_seg = segs[best_idx];
+					out_road_z = cur_seg.sz + best_t * (cur_seg.ez - cur_seg.sz);
+
+					float ax = 0.0f, ay = 0.0f, z_ahead = out_road_z, covered = 0.0f;
+					WalkLanePolylineForward(segs, best_idx, best_t, ahead_dist, ax, ay, z_ahead, covered);
+
+					if (covered > 1.0f)
+					{
+						out_grade_ahead = std::clamp((z_ahead - out_road_z) / covered, -0.35f, 0.35f);
+					}
+					else if (cur_seg.raw_len > 1.0f)
+					{
+						out_grade_ahead = std::clamp((cur_seg.ez - cur_seg.sz) / cur_seg.raw_len, -0.35f, 0.35f);
+					}
+				}
+			}
+		}
+
+		if (err != GPS_ERROR_NONE)
+		{
+			return err;
+		}
+
+		if (!WriteRef(amx, params[6], out_road_z) ||
+		    !WriteRef(amx, params[7], out_grade_ahead))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		return GPS_ERROR_NONE;
+	}
+
+	cell AMX_NATIVE_CALL GetPathTimeEstimate(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS_MIN(6);
+
+		const int path_id = static_cast<int>(params[1]);
+		const int path_index = static_cast<int>(params[2]);
+		const float x = amx_ctof(params[3]);
+		const float y = amx_ctof(params[4]);
+		const float current_speed_kmh = (params[0] >= 7 * static_cast<cell>(sizeof(cell))) ? amx_ctof(params[7]) : 0.0f;
+		const float max_speed_kmh = (params[0] >= 8 * static_cast<cell>(sizeof(cell))) ? amx_ctof(params[8]) : 0.0f;
+
+		if (!(current_speed_kmh >= 0.0f) || !(max_speed_kmh >= 0.0f) ||
+		    !std::isfinite(current_speed_kmh) || !std::isfinite(max_speed_kmh))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
+
+		const auto path = Container::Paths::Find(path_id);
+		if (path == nullptr)
+		{
+			return GPS_ERROR_INVALID_PATH;
+		}
+
+		float out_seconds = 0.0f;
+		float out_remaining_dist = 0.0f;
+		int err = GPS_ERROR_NONE;
+
+		{
+			std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+			const auto& nodes = path->getNodes();
+			const int count = static_cast<int>(nodes.size());
+			if (count < 2)
+			{
+				err = GPS_ERROR_INVALID_PATH;
+			}
+			else
+			{
+				const int num_segs = count - 1;
+				const int clamped_idx = std::clamp(path_index, 0, num_segs - 1);
+				const int build_start = std::max(0, clamped_idx - 1);
+
+				std::vector<LaneSeg> segs;
+				bool reaches_end = false;
+				if (!BuildPathLaneSegments(path, build_start, segs, -1.0f, &reaches_end) || segs.empty())
+				{
+					err = GPS_ERROR_INTERNAL;
+				}
+				else
+				{
+					const int max_search = std::min(num_segs - 1, clamped_idx + 8);
+					int best_idx = 0;
+					float best_t = 0.0f, best_qx = 0.0f, best_qy = 0.0f, lat_err = 0.0f;
+					ProjectOntoLaneSegments(segs, build_start, x, y, clamped_idx, max_search, best_idx, best_t, best_qx, best_qy, lat_err);
+
+					auto seg_limit_ms = [max_speed_kmh](const Connection* conn) -> float
+					{
+						if (max_speed_kmh > 0.0f)
+						{
+							return std::max(0.1f, max_speed_kmh / 3.6f);
+						}
+						const float kmh = (conn != nullptr) ? conn->getSpeedLimit() : 50.0f;
+						return std::max(0.1f, kmh / 3.6f);
+					};
+
+					struct EtaPolyPt
+					{
+						float x;
+						float y;
+						float s;
+						float lim_ms;
+					};
+
+					std::vector<EtaPolyPt> poly;
+					poly.reserve(segs.size() - best_idx + 4);
+					float cum_s = 0.0f;
+
+					const LaneSeg& start_seg = segs[best_idx];
+					const float cur_x = start_seg.sx + best_t * (start_seg.ex - start_seg.sx);
+					const float cur_y = start_seg.sy + best_t * (start_seg.ey - start_seg.sy);
+					poly.push_back({ cur_x, cur_y, 0.0f, seg_limit_ms(start_seg.conn) });
+
+					for (int idx = best_idx; idx < static_cast<int>(segs.size()); ++idx)
+					{
+						const LaneSeg& s = segs[idx];
+						const float lim_ms = seg_limit_ms(s.conn);
+						if (idx > best_idx)
+						{
+							const float gap = std::hypot(s.sx - poly.back().x, s.sy - poly.back().y);
+							if (gap > 0.01f)
+							{
+								cum_s += gap;
+								poly.push_back({ s.sx, s.sy, cum_s, lim_ms });
+							}
+						}
+
+						const float seg_end_dist = std::hypot(s.ex - poly.back().x, s.ey - poly.back().y);
+						if (seg_end_dist > 0.01f)
+						{
+							cum_s += seg_end_dist;
+							poly.push_back({ s.ex, s.ey, cum_s, lim_ms });
+						}
+					}
+
+					const float total_poly_len = poly.back().s;
+					out_remaining_dist = total_poly_len;
+
+					if (poly.size() >= 2 && total_poly_len > 0.01f)
+					{
+						std::vector<float> s_vals;
+						s_vals.reserve(static_cast<size_t>(total_poly_len / 3.0f) + poly.size() + 2);
+						size_t pk = 0;
+						float grid_s = 0.0f;
+						while (grid_s <= total_poly_len || pk < poly.size())
+						{
+							const float next_grid = (grid_s <= total_poly_len) ? grid_s : std::numeric_limits<float>::infinity();
+							const float next_poly = (pk < poly.size()) ? poly[pk].s : std::numeric_limits<float>::infinity();
+							float chosen = 0.0f;
+							if (next_grid <= next_poly)
+							{
+								chosen = next_grid;
+								grid_s += 3.0f;
+							}
+							else
+							{
+								chosen = next_poly;
+								++pk;
+							}
+							if (s_vals.empty() || (chosen - s_vals.back()) > 0.05f)
+							{
+								s_vals.push_back(chosen);
+							}
+						}
+						if (total_poly_len - s_vals.back() > 1e-4f)
+						{
+							if (total_poly_len - s_vals.back() <= 0.05f)
+							{
+								s_vals.back() = total_poly_len;
+							}
+							else
+							{
+								s_vals.push_back(total_poly_len);
+							}
+						}
+
+						auto sample_cursor = [&poly](size_t& cursor, const float target_s, float& ox, float& oy, float& out_lim_ms)
+						{
+							if (target_s <= 0.0f)
+							{
+								ox = poly.front().x;
+								oy = poly.front().y;
+								out_lim_ms = poly.front().lim_ms;
+								return;
+							}
+							while (cursor + 2 < poly.size() && target_s > poly[cursor + 1].s)
+							{
+								++cursor;
+							}
+							if (target_s >= poly.back().s)
+							{
+								ox = poly.back().x;
+								oy = poly.back().y;
+								out_lim_ms = poly.back().lim_ms;
+								return;
+							}
+							const float ds = poly[cursor + 1].s - poly[cursor].s;
+							const float frac = (ds > 0.0001f) ? ((target_s - poly[cursor].s) / ds) : 0.0f;
+							ox = poly[cursor].x + frac * (poly[cursor + 1].x - poly[cursor].x);
+							oy = poly[cursor].y + frac * (poly[cursor + 1].y - poly[cursor].y);
+							out_lim_ms = poly[cursor + 1].lim_ms;
+						};
+
+						const size_t n_samples = s_vals.size();
+						std::vector<float> v_profile(n_samples);
+						const float global_min_curve_ms = CURVE_MIN_SPEED_KMH / 3.6f;
+
+						size_t cur_prev = 0;
+						size_t cur_mid = 0;
+						size_t cur_next = 0;
+
+						for (size_t i = 0; i < n_samples; ++i)
+						{
+							const float s_c = s_vals[i];
+							float bx = 0.0f, by = 0.0f, lim_ms = 0.0f;
+							sample_cursor(cur_mid, s_c, bx, by, lim_ms);
+
+							float v_allowed = lim_ms;
+							const float s_prev = std::max(0.0f, s_c - CURVE_ARC_WINDOW);
+							const float s_next = std::min(total_poly_len, s_c + CURVE_ARC_WINDOW);
+							if ((s_c - s_prev) >= 1.0f && (s_next - s_c) >= 1.0f)
+							{
+								float ax = 0.0f, ay = 0.0f, lim_a = 0.0f;
+								float cx = 0.0f, cy = 0.0f, lim_c = 0.0f;
+								sample_cursor(cur_prev, s_prev, ax, ay, lim_a);
+								sample_cursor(cur_next, s_next, cx, cy, lim_c);
+								const float min_curve_ms = std::min(lim_ms, global_min_curve_ms);
+								const float v_curve_ms = ComputeCurveSpeedMs(ax, ay, bx, by, cx, cy, lim_ms, min_curve_ms);
+								v_allowed = std::min(v_allowed, v_curve_ms);
+							}
+							v_profile[i] = v_allowed;
+						}
+
+						const float current_speed_ms = current_speed_kmh / 3.6f;
+						v_profile[0] = std::min(current_speed_ms, v_profile[0]);
+						for (size_t i = 1; i < n_samples; ++i)
+						{
+							const float ds = s_vals[i] - s_vals[i - 1];
+							const float v_accel = std::sqrt(v_profile[i - 1] * v_profile[i - 1] + 2.0f * PATH_ETA_ACCEL * ds);
+							v_profile[i] = std::min(v_profile[i], v_accel);
+						}
+
+						if (reaches_end && path->hasStopPoint())
+						{
+							v_profile.back() = 0.0f;
+						}
+						for (size_t idx = n_samples - 1; idx > 0; --idx)
+						{
+							const size_t i = idx - 1;
+							const float ds = s_vals[i + 1] - s_vals[i];
+							const float v_brake = std::sqrt(v_profile[i + 1] * v_profile[i + 1] + 2.0f * CURVE_MAX_BRAKE_DECEL * ds);
+							v_profile[i] = std::min(v_profile[i], v_brake);
+						}
+
+						double total_sec = 0.0;
+						for (size_t i = 1; i < n_samples; ++i)
+						{
+							const float ds = s_vals[i] - s_vals[i - 1];
+							const float v_avg = std::max(0.5f, 0.5f * (v_profile[i - 1] + v_profile[i]));
+							total_sec += static_cast<double>(ds) / static_cast<double>(v_avg);
+						}
+						out_seconds = static_cast<float>(total_sec);
+					}
+				}
+			}
+		}
+
+		if (err != GPS_ERROR_NONE)
+		{
+			return err;
+		}
+
+		if (!WriteRef(amx, params[5], out_seconds) ||
+		    !WriteRef(amx, params[6], out_remaining_dist))
+		{
+			return GPS_ERROR_INVALID_PARAMS;
+		}
 
 		return GPS_ERROR_NONE;
 	}
 }
 
-template <cell(AMX_NATIVE_CALL *Func)(AMX*, cell*)>
-cell AMX_NATIVE_CALL SafeNative(AMX* amx, cell* params)
+template <cell(AMX_NATIVE_CALL *Func)(AMX*, cell*), cell OnError = GPS_ERROR_INTERNAL>
+cell SafeNativeCall(AMX* amx, cell* params, const char* name)
 {
 	try
 	{
@@ -3488,23 +4690,26 @@ cell AMX_NATIVE_CALL SafeNative(AMX* amx, cell* params)
 	}
 	catch (const std::exception& e)
 	{
-		GPSLogger::Log("[GPS-Plugin-Plus Exception]: %s", e.what());
-		return GPS_ERROR_INTERNAL;
+		GPSLogger::Log("[GPS-Plugin-Plus Exception] %s: %s", name, e.what());
+		return OnError;
 	}
 	catch (...)
 	{
-		GPSLogger::Log("[GPS-Plugin-Plus Exception]: Unknown exception");
-		return GPS_ERROR_INTERNAL;
+		GPSLogger::Log("[GPS-Plugin-Plus Exception] %s: Unknown exception", name);
+		return OnError;
 	}
 }
 
-#define DEFINE_NATIVE(name) { #name, SafeNative<Natives::name> }
+#define DEFINE_NATIVE_EX(pawn_name, cpp_name, on_error) \
+	{ pawn_name, [](AMX* a, cell* p) -> cell { return SafeNativeCall<Natives::cpp_name, (on_error)>(a, p, pawn_name); } }
+#define DEFINE_NATIVE(name) DEFINE_NATIVE_EX(#name, name, GPS_ERROR_INTERNAL)
+#define DEFINE_NATIVE_BOOL(name) DEFINE_NATIVE_EX(#name, name, 0)
 
 AMX_NATIVE_INFO PluginNatives[] =
 {
 	DEFINE_NATIVE(CreateMapNode),
 	DEFINE_NATIVE(DestroyMapNode),
-	DEFINE_NATIVE(IsValidMapNode),
+	DEFINE_NATIVE_BOOL(IsValidMapNode),
 	DEFINE_NATIVE(GetMapNodePos),
 
 	DEFINE_NATIVE(GetMapNodeType),
@@ -3521,18 +4726,20 @@ AMX_NATIVE_INFO PluginNatives[] =
 
 	DEFINE_NATIVE(GetConnectionLaneInfo),
 	DEFINE_NATIVE(GetConnectionLanePos),
-	DEFINE_NATIVE(IsConnectionOneWay),
+	DEFINE_NATIVE_BOOL(IsConnectionOneWay),
+	DEFINE_NATIVE_BOOL(IsConnectionWrongWay),
 
 	DEFINE_NATIVE(GetDistanceBetweenMapNodes),
 	DEFINE_NATIVE(GetAngleBetweenMapNodes),
 	DEFINE_NATIVE(GetMapNodeDistanceFromPoint),
 	DEFINE_NATIVE(GetMapNodeAngleFromPoint),
 	DEFINE_NATIVE(GetClosestMapNodeToPoint),
+	DEFINE_NATIVE(GetClosestMapNodeToPointAngle),
 
 	DEFINE_NATIVE(GetHighestMapNodeID),
 	DEFINE_NATIVE(GetRandomMapNode),
 	DEFINE_NATIVE(GetRandomMapNodeFromArea),
-	{"GetRandomMapNodeInArea",			SafeNative<Natives::GetRandomMapNodeFromArea>},
+	DEFINE_NATIVE_EX("GetRandomMapNodeInArea", GetRandomMapNodeFromArea, GPS_ERROR_INTERNAL),
 
 	DEFINE_NATIVE(FindPath),
 	DEFINE_NATIVE(FindPathThreaded),
@@ -3541,7 +4748,7 @@ AMX_NATIVE_INFO PluginNatives[] =
 
 	DEFINE_NATIVE(SaveMapNodesToFile),
 
-	DEFINE_NATIVE(IsValidPath),
+	DEFINE_NATIVE_BOOL(IsValidPath),
 	DEFINE_NATIVE(GetPathSize),
 	DEFINE_NATIVE(GetPathLength),
 	DEFINE_NATIVE(GetPathNode),
@@ -3550,9 +4757,9 @@ AMX_NATIVE_INFO PluginNatives[] =
 	DEFINE_NATIVE(DestroyPath),
 
 	DEFINE_NATIVE(SetMapNodeBlocked),
-	DEFINE_NATIVE(IsMapNodeBlocked),
+	DEFINE_NATIVE_BOOL(IsMapNodeBlocked),
 	DEFINE_NATIVE(SetConnectionBlocked),
-	DEFINE_NATIVE(IsConnectionBlocked),
+	DEFINE_NATIVE_BOOL(IsConnectionBlocked),
 
 	DEFINE_NATIVE(GetClosestPointOnRoad),
 	DEFINE_NATIVE(GetRoadPositionInfo),
@@ -3565,7 +4772,7 @@ AMX_NATIVE_INFO PluginNatives[] =
 	DEFINE_NATIVE(GetPathRemainingInfo),
 	DEFINE_NATIVE(GetPathNextManeuver),
 	DEFINE_NATIVE(GetSimplifiedPathNodes),
-	DEFINE_NATIVE(IsMapNodeIntersection),
+	DEFINE_NATIVE_BOOL(IsMapNodeIntersection),
 	DEFINE_NATIVE(GetMapNodeConnectionTarget),
 
 	DEFINE_NATIVE(SetConnectionTrafficMultiplier),
@@ -3602,32 +4809,32 @@ AMX_NATIVE_INFO PluginNatives[] =
 	DEFINE_NATIVE(GetPathElevationStats),
 
 	DEFINE_NATIVE(RegisterTunnelArea),
-	DEFINE_NATIVE(UnregisterTunnelArea),
+	DEFINE_NATIVE_BOOL(UnregisterTunnelArea),
 	DEFINE_NATIVE(ClearCustomTunnelAreas),
-	DEFINE_NATIVE(IsPointInTunnel),
-	DEFINE_NATIVE(IsMapNodeUnderground),
-	DEFINE_NATIVE(GetPathTunnelSegments),
+	DEFINE_NATIVE_BOOL(IsPointInTunnel),
+	DEFINE_NATIVE_BOOL(IsMapNodeUnderground),
+	DEFINE_NATIVE_BOOL(GetPathTunnelSegments),
 
 	DEFINE_NATIVE(FindNearestPointByRoad),
 
 	DEFINE_NATIVE(RegisterRoadRadar),
-	DEFINE_NATIVE(UnregisterRoadRadar),
+	DEFINE_NATIVE_BOOL(UnregisterRoadRadar),
 	DEFINE_NATIVE(ClearRoadRadars),
-	DEFINE_NATIVE(GetNextPathRadar),
+	DEFINE_NATIVE_BOOL(GetNextPathRadar),
 
 	DEFINE_NATIVE(GetPathOffsetPosition),
 
-	DEFINE_NATIVE(IsMapNodeDeadEnd),
+	DEFINE_NATIVE_BOOL(IsMapNodeDeadEnd),
 	DEFINE_NATIVE(FindEvasivePath),
 
 	DEFINE_NATIVE(SetConnectionToll),
-	DEFINE_NATIVE(GetConnectionToll),
+	DEFINE_NATIVE_BOOL(GetConnectionToll),
 	DEFINE_NATIVE(FindPathAvoidTolls),
 
 	DEFINE_NATIVE(GetPathRoundaboutInfo),
 	DEFINE_NATIVE(GetSmoothPathPoints),
 
-	DEFINE_NATIVE(IsConnectionPaved),
+	DEFINE_NATIVE_BOOL(IsConnectionPaved),
 	DEFINE_NATIVE(SetConnectionPaved),
 	DEFINE_NATIVE(FindPathPavedOnly),
 
@@ -3641,6 +4848,14 @@ AMX_NATIVE_INFO PluginNatives[] =
 	DEFINE_NATIVE(GetConnectionMaxHeight),
 	DEFINE_NATIVE(SetAreaMaxHeight),
 	DEFINE_NATIVE(FindPathWithHeightLimit),
+
+	DEFINE_NATIVE(GetPathLaneTarget),
+
+	DEFINE_NATIVE(FindPathToPoint),
+	DEFINE_NATIVE_BOOL(IsPathStopReached),
+	DEFINE_NATIVE(GetPathSpeedAdvice),
+	DEFINE_NATIVE(GetPathRoadProfile),
+	DEFINE_NATIVE(GetPathTimeEstimate),
 
 	{0, 0}
 };
