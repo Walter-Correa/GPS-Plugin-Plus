@@ -2562,7 +2562,7 @@ namespace Natives
 		CHECK_PARAMS(1);
 		const auto id = static_cast<int>(params[1]);
 		float mult = Container::Connections::GetTrafficMultiplier(id);
-		return amx_ftoc(mult);
+		return PawnUtils::FloatToCell(mult);
 	}
 
 
@@ -3190,7 +3190,7 @@ namespace Natives
 		CHECK_PARAMS(1);
 		const auto id = static_cast<int>(params[1]);
 		float danger = Container::Nodes::GetDangerWeight(id);
-		return amx_ftoc(danger);
+		return PawnUtils::FloatToCell(danger);
 	}
 
 
@@ -3852,7 +3852,7 @@ namespace Natives
 		CHECK_PARAMS(1);
 		const int id = static_cast<int>(params[1]);
 		float speed = Container::Connections::GetSpeedLimit(id);
-		return amx_ftoc(speed);
+		return PawnUtils::FloatToCell(speed);
 	}
 
 
@@ -3899,7 +3899,7 @@ namespace Natives
 		CHECK_PARAMS(1);
 		const int id = static_cast<int>(params[1]);
 		float height = Container::Connections::GetMaxHeight(id);
-		return amx_ftoc(height);
+		return PawnUtils::FloatToCell(height);
 	}
 
 

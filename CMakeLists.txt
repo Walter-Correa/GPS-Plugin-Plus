@@ -60,7 +60,7 @@ if(HAVE_STDINT_H)
   add_definitions(-DHAVE_STDINT_H)
 endif()
 
-include_directories(
+include_directories(SYSTEM
   ./lib/sdk
   ./lib/sdk/amx
 )
@@ -106,6 +106,13 @@ set_target_properties(GPS-Plugin-Plus PROPERTIES PREFIX "")
 set_target_properties(GPS-Plugin-Plus PROPERTIES OUTPUT_NAME "GPS")
 if(MSVC)
   set_property(TARGET GPS-Plugin-Plus PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  target_compile_options(GPS-Plugin-Plus PRIVATE
+    /W3
+    /external:W0
+    "/external:I${CMAKE_CURRENT_SOURCE_DIR}/lib"
+    "/external:I${CMAKE_CURRENT_SOURCE_DIR}/lib/sdk"
+    "/external:I${CMAKE_CURRENT_SOURCE_DIR}/lib/sdk/amx"
+  )
 elseif(MINGW)
   set_target_properties(GPS-Plugin-Plus PROPERTIES LINK_FLAGS "-static")
 endif()
@@ -126,6 +133,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/lib/open.mp-sdk/CMakeLists.txt")
   add_subdirectory(lib/open.mp-sdk)
   add_library(GPS-Component-Plus MODULE ${GPS_COMMON_SOURCES} src/component.cpp)
   target_compile_definitions(GPS-Component-Plus PRIVATE OMP_COMPONENT)
+  target_include_directories(GPS-Component-Plus SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/lib/open.mp-sdk/include")
   target_link_libraries(GPS-Component-Plus PRIVATE OMP-SDK)
   if(NOT WIN32)
     target_link_libraries(GPS-Component-Plus PRIVATE pthread rt)
@@ -136,6 +144,14 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/lib/open.mp-sdk/CMakeLists.txt")
   set_target_properties(GPS-Component-Plus PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/components")
   if(MSVC)
     set_property(TARGET GPS-Component-Plus PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    target_compile_options(GPS-Component-Plus PRIVATE
+      /W3
+      /external:W0
+      "/external:I${CMAKE_CURRENT_SOURCE_DIR}/lib"
+      "/external:I${CMAKE_CURRENT_SOURCE_DIR}/lib/sdk"
+      "/external:I${CMAKE_CURRENT_SOURCE_DIR}/lib/sdk/amx"
+      "/external:I${CMAKE_CURRENT_SOURCE_DIR}/lib/open.mp-sdk/include"
+    )
   elseif(MINGW)
     set_target_properties(GPS-Component-Plus PROPERTIES LINK_FLAGS "-static")
   endif()
