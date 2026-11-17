@@ -737,6 +737,8 @@ namespace Container
 	namespace Connections
 	{
 		std::atomic<float> min_traffic_multiplier_{ 1.0f };
+		float max_connection_length = 0.0f;
+		float max_road_width = 0.0f;
 
 		float GetMinTrafficMultiplier()
 		{
@@ -784,6 +786,16 @@ namespace Container
 
 			const auto id = highest_connection_id++;
 			const auto connection = new Connection(id, source, target, source->getDistanceFromNode(target), road_width, left_lanes, right_lanes, one_way);
+
+			const float len_2d = std::hypot(target->getX() - source->getX(), target->getY() - source->getY());
+			if (len_2d > max_connection_length)
+			{
+				max_connection_length = len_2d;
+			}
+			if (road_width > max_road_width)
+			{
+				max_road_width = road_width;
+			}
 
 			connections[id] = connection;
 
@@ -989,6 +1001,108 @@ namespace Container
 			out_road_width = best_conn->getRoadWidth();
 			out_conn_id = best_conn->getId();
 			return true;
+		}
+
+		bool IsPointInRoad(const float x, const float y, const float z, const float radius, const PathType type, const float max_z_diff, int& out_conn_id, const bool find_best_conn)
+		{
+			out_conn_id = -1;
+			if (radius < 0.0f || max_z_diff <= 0.0f || connections.empty())
+			{
+				return false;
+			}
+
+			const float search_radius = max_connection_length * 0.5f + max_road_width * 0.5f + radius + 1.0f;
+			const float r_sq = search_radius * search_radius;
+			const int cell_radius = std::max(1, static_cast<int>(std::ceil(search_radius / GRID_CELL_SIZE)));
+			const int cx = static_cast<int>(std::floor(x / GRID_CELL_SIZE));
+			const int cy = static_cast<int>(std::floor(y / GRID_CELL_SIZE));
+
+			float best_norm_sq = std::numeric_limits<float>::infinity();
+			int best_id = -1;
+
+			for (int dx = -cell_radius; dx <= cell_radius; ++dx)
+			{
+				for (int dy = -cell_radius; dy <= cell_radius; ++dy)
+				{
+					const int64_t key = (static_cast<int64_t>(cx + dx) << 32) | static_cast<uint32_t>(cy + dy);
+					const auto it = spatial_grid.find(key);
+					if (it == spatial_grid.end()) continue;
+
+					for (Node* node : it->second)
+					{
+						if (node == nullptr || node->isSetForDeletion() || !IsNodeEligible(node, z, type))
+						{
+							continue;
+						}
+						const float nx = node->getX() - x;
+						const float ny = node->getY() - y;
+						if ((nx * nx + ny * ny) > r_sq)
+						{
+							continue;
+						}
+
+						for (auto conn : node->getConnections())
+						{
+							if (conn == nullptr) continue;
+							Node* a = conn->getSource();
+							Node* b = conn->getTarget();
+
+							if (a == nullptr || b == nullptr || a->isSetForDeletion() || b->isSetForDeletion())
+							{
+								continue;
+							}
+
+							if (type != PATH_TYPE_ANY && a->getType() != type && b->getType() != type)
+							{
+								continue;
+							}
+
+							if (!IsNodeEligible(a, z, type) || !IsNodeEligible(b, z, type))
+							{
+								continue;
+							}
+
+							const float w = std::max(0.0f, conn->getRoadWidth());
+							const float half_eff = w * 0.5f + radius;
+							const float max_dist_sq = half_eff * half_eff;
+
+							float qx = 0.0f, qy = 0.0f, qz = 0.0f, dist_sq = 0.0f;
+							if (!ProjectPointOnConnection(x, y, conn, qx, qy, qz, dist_sq))
+							{
+								// Degenerate zero-length 2D connection: treat as disc centered on node
+								const float adx = x - a->getX();
+								const float ady = y - a->getY();
+								dist_sq = adx * adx + ady * ady;
+								qz = (a->getZ() + b->getZ()) * 0.5f;
+							}
+
+							if (dist_sq <= max_dist_sq && std::abs(z - qz) <= max_z_diff)
+							{
+								if (!find_best_conn)
+								{
+									out_conn_id = conn->getId();
+									return true;
+								}
+
+								const float norm_sq = (max_dist_sq > 0.0f) ? (dist_sq / max_dist_sq) : 0.0f;
+								if (norm_sq + 1e-6f < best_norm_sq ||
+									(std::abs(norm_sq - best_norm_sq) <= 1e-6f && (best_id == -1 || conn->getId() < best_id)))
+								{
+									best_norm_sq = norm_sq;
+									best_id = conn->getId();
+								}
+							}
+						}
+					}
+				}
+			}
+
+			if (best_id != -1)
+			{
+				out_conn_id = best_id;
+				return true;
+			}
+			return false;
 		}
 
 		std::vector<RoadCandidate> FindRoadCandidates(const float x, const float y, const float z, const float max_radius, const PathType type, const int required_component)

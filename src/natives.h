@@ -89,6 +89,7 @@ namespace Natives
 
 	cell AMX_NATIVE_CALL GetClosestPointOnRoad(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL GetRoadPositionInfo(AMX* amx, cell* params);
+	cell AMX_NATIVE_CALL IsPointInValidRoad(AMX* amx, cell* params);
 	cell AMX_NATIVE_CALL IsPointAgainstTraffic(AMX* amx, cell* params);
 
 	cell AMX_NATIVE_CALL GetPathTurnDirection(AMX* amx, cell* params);

@@ -9,7 +9,7 @@
 It empowers Pawn developers to build intelligent, state-of-the-art navigation systems: **Threaded A\* Route Calculations**, **Real-Time Turn-by-Turn Maneuvers**, **Catmull-Rom Spline Curve Smoothing**, **Douglas-Peucker Route Decimation**, **Autonomous Pure Pursuit Bot Steering**, **High-Speed Police Intercept Vectors**, **Dynamic Traffic Jams & Roadblocks**, **Waze-Style Speed Radars**, and **Nearest Service Queries by Real Road Distance**—with full asynchronous worker thread support (zero server tick lag on threaded queries) and drop-in compatibility.
 
 > [!NOTE]
-> This project is conceptually inspired by the original [samp-gps-plugin](https://github.com/kristoisberg/samp-gps-plugin) by [@kristoisberg](https://github.com/kristoisberg) and its fork by [@AmyrAhmady](https://github.com/AmyrAhmady). It has been completely re-architected and modernized from the ground up, introducing dual-stack architecture (native open.mp Component + SA-MP Plugin), a native multi-threaded C++ worker pool, PawnPlus task async coroutines, multi-modal routing (vehicles, pedestrians, boats), and 113+ high-performance spatial natives.
+> This project is conceptually inspired by the original [samp-gps-plugin](https://github.com/kristoisberg/samp-gps-plugin) by [@kristoisberg](https://github.com/kristoisberg) and its fork by [@AmyrAhmady](https://github.com/AmyrAhmady). It has been completely re-architected and modernized from the ground up, introducing dual-stack architecture (native open.mp Component + SA-MP Plugin), a native multi-threaded C++ worker pool, PawnPlus task async coroutines, multi-modal routing (vehicles, pedestrians, boats), and 114+ high-performance spatial natives.
 
 ---
 
@@ -48,7 +48,7 @@ Comprehensive, modular guides and technical references are available in the [`do
 | **[🧭 Navigation & Geometry](docs/navigation-and-geometry.md)** | Real-time GPS tracking, turn-by-turn guidance, roundabout detection, Catmull-Rom splines, and route decimation. |
 | **[🤖 AI & Traffic Simulation](docs/ai-and-traffic-simulation.md)** | Pure Pursuit bot steering, police intercept vectors, fugitive evasion, speed radars, and real road-distance queries. |
 | **[📍 Map Nodes & Spatial Analytics](docs/map-nodes-and-spatial.md)** | Map node graph lifecycle, multi-lane roads, curb-side alignment, neighborhood zones, and path serialization. |
-| **[📚 Complete API Reference](docs/api-reference.md)** | Exhaustive technical dictionary covering all 113 native functions, callbacks, enums, and error codes. |
+| **[📚 Complete API Reference](docs/api-reference.md)** | Exhaustive technical dictionary covering all 114 native functions, callbacks, enums, and error codes. |
 
 ---
 
@@ -157,11 +157,11 @@ public OnPlayerRouteReady(Path:path, playerid)
 
 ## Complete API Reference
 
-All 113 native functions, callbacks, style enumerations, and constants are exhaustively documented with signature parameters, return values, and code snippets in **[`docs/api-reference.md`](docs/api-reference.md)**:
+All 114 native functions, callbacks, style enumerations, and constants are exhaustively documented with signature parameters, return values, and code snippets in **[`docs/api-reference.md`](docs/api-reference.md)**:
 
 * **[Map Node Management](docs/api-reference.md#1-map-node-management):** `CreateMapNode`, `DestroyMapNode`, `IsValidMapNode`, `GetMapNodePos`, `GetRandomMapNode`...
 * **[Road Connections & Lanes](docs/api-reference.md#2-road-connections--lanes):** `CreateConnection`, `GetConnectionLaneInfo`, `GetConnectionLanePos`, `IsConnectionOneWay`...
-* **[Spatial Queries & Snapping](docs/api-reference.md#3-spatial-queries--geometric-snapping):** `GetClosestMapNodeToPoint`, `GetClosestPointOnRoad`, `GetRoadPositionInfo`...
+* **[Spatial Queries & Snapping](docs/api-reference.md#3-spatial-queries--geometric-snapping):** `GetClosestMapNodeToPoint`, `GetClosestPointOnRoad`, `GetRoadPositionInfo`, `IsPointInValidRoad` / `IsPointInValidRoadEx`...
 * **[Pathfinding & Routing](docs/api-reference.md#4-pathfinding--routing):** `FindPath`, `FindPathThreadedEx`, `FindMultiStopPath`, `FindPathForVehicleCat`...
 * **[Dynamic Traffic & Roadblocks](docs/api-reference.md#5-dynamic-traffic--roadblocks):** `SetMapNodeBlocked`, `SetConnectionBlocked`, `SetConnectionTrafficMultiplier`...
 * **[Turn-by-Turn Navigation & Tracking](docs/api-reference.md#6-turn-by-turn-navigation--tracking):** `GetPathProgress`, `GetPathRemainingInfo`, `GetPathNextManeuver`...
@@ -206,6 +206,13 @@ make -j$(nproc)
 
 <details>
 <summary>Show the version history</summary>
+
+### 2.2.0 — 16/11/2026
+- Added `IsPointInValidRoad(Float:x, Float:y, Float:z, Float:radius = 0.0, PathType:type = PATH_TYPE_VEHICLE, Float:max_z_diff = 4.0)` and `IsPointInValidRoadEx(..., &Connection:connectionid = INVALID_CONNECTION_ID)`:
+  - Checks whether a world coordinate lies inside any eligible road connection's capsule (`2D distance <= road_width * 0.5 + radius`, clamped `t` in `[0, 1]`) and within `max_z_diff` of the linearly interpolated roadbed elevation `qz`.
+  - Uses dynamic spatial search radius bounds (`max_connection_length * 0.5 + max_road_width * 0.5 + radius + 1.0`) tracked in `Container::Connections::Add` so long road segments (e.g., 60+ m from either endpoint node) are never missed.
+  - Evaluates vertical clearance (`max_z_diff`) per candidate to distinguish overpasses/viaducts from lower roads and handles parallel streets of varying widths.
+  - `IsPointInValidRoad` returns immediately on the first matching connection (`early exit`, zero AMX heap allocation), while `IsPointInValidRoadEx` evaluates all matching candidates and returns the `Connection` with minimum normalized lateral deviation.
 
 ### 2.1.0 — 14/11/2026
 - **Accurate GTA SA One-Way Orientation & Lane Geometry Overhaul:**

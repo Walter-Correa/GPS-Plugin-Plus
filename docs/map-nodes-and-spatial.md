@@ -114,6 +114,21 @@ native GetClosestPointOnRoad(
     PathType:type = PATH_TYPE_VEHICLE
 );
 
+native bool:IsPointInValidRoad(
+    Float:x, Float:y, Float:z,
+    Float:radius = 0.0,
+    PathType:type = PATH_TYPE_VEHICLE,
+    Float:max_z_diff = 4.0
+);
+
+native bool:IsPointInValidRoadEx(
+    Float:x, Float:y, Float:z,
+    Float:radius = 0.0,
+    PathType:type = PATH_TYPE_VEHICLE,
+    Float:max_z_diff = 4.0,
+    &Connection:connectionid = INVALID_CONNECTION_ID
+) = IsPointInValidRoad;
+
 native GetPathLaneTarget(
     Path:pathid,
     Float:x, Float:y,
@@ -146,6 +161,20 @@ native GetRandomMapNodeFromArea(
 // Pick a random pedestrian sidewalk node within Los Santos
 new MapNode:ped_node;
 GetRandomMapNodeFromArea(1000.0, -2000.0, 2800.0, -1000.0, ped_node, PATH_TYPE_PEDESTRIAN);
+```
+
+### Road Containment Check (`IsPointInValidRoad` / `IsPointInValidRoadEx`)
+Unlike node-distance checks that fail in the middle of long straight road segments, `IsPointInValidRoad` tests whether `(x, y, z)` lies inside the capsule of any road connection (`2D distance <= road_width * 0.5 + radius`, clamped $t \in [0, 1]$) and within `max_z_diff` of the linearly interpolated road elevation $Q_z$ (preventing false positives between overpasses and lower streets). `IsPointInValidRoad` returns immediately on the first matching connection; `IsPointInValidRoadEx` evaluates all matching candidates and writes the connection with minimum normalized lateral deviation to `connectionid`:
+
+```pawn
+if (IsPointInValidRoad(x, y, z))
+{
+    new Connection:conn;
+    if (IsPointInValidRoadEx(x, y, z, 0.0, PATH_TYPE_VEHICLE, 4.0, conn))
+    {
+        // Point is within the roadbed width of connection `conn` (best normalized match)
+    }
+}
 ```
 
 ---

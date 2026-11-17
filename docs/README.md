@@ -13,7 +13,7 @@ Welcome to the technical documentation for **GPS Plugin Plus** (SA-MP & open.mp)
 | **[🧭 Navigation & Geometry](navigation-and-geometry.md)** | Real-time GPS progress tracking, ETA and distance metrics, turn-by-turn guidance (`TurnDirection`), roundabout detection with exit counting, Catmull-Rom spline path smoothing, Douglas-Peucker route decimation, delta re-routing rejoin points, and lateral offset calculation. |
 | **[🤖 AI & Traffic Simulation](ai-and-traffic-simulation.md)** | Pure Pursuit autonomous bot steering controller, high-speed police interception vectors, tactical fugitive anti-dead-end evasion, Waze-style speed radars, nearest service lookup by real road distance, reachability isochrones, tunnel detection, and wrong-way traffic enforcement. |
 | **[📍 Map Nodes & Spatial Analytics](map-nodes-and-spatial.md)** | Graph node architecture, dynamic node & connection lifecycle, multi-lane road geometry, spatial proximity queries, curb-side vehicle snapping, San Andreas neighborhood zones, path text serialization, and automatic memory TTL cleanup. |
-| **[📚 Complete API Reference](api-reference.md)** | Exhaustive technical dictionary covering all 113 native functions, callbacks, enums, error codes, and PawnPlus asynchronous stocks. |
+| **[📚 Complete API Reference](api-reference.md)** | Exhaustive technical dictionary covering all 114 native functions, callbacks, enums, error codes, and PawnPlus asynchronous stocks. |
 
 ---
 

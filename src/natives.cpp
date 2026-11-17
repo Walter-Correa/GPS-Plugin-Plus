@@ -1,4 +1,5 @@
 #include <map>
+#include <cmath>
 #include <thread>
 #include <shared_mutex>
 #include <mutex>
@@ -1838,6 +1839,70 @@ namespace Natives
 		}
 
 		return GPS_ERROR_NONE;
+	}
+
+
+	cell AMX_NATIVE_CALL IsPointInValidRoad(AMX* amx, cell* params)
+	{
+		CHECK_PARAMS_MIN(3);
+
+		const float x = amx_ctof(params[1]);
+		const float y = amx_ctof(params[2]);
+		const float z = amx_ctof(params[3]);
+		float radius = 0.0f;
+		auto type = PATH_TYPE_VEHICLE;
+		float max_z_diff = 4.0f;
+		const bool has_conn_ref = (params[0] >= (7 * 4));
+
+		auto write_invalid_conn = [&]()
+		{
+			if (has_conn_ref)
+			{
+				WriteRef(amx, params[7], INVALID_CONNECTION_ID);
+			}
+		};
+
+		if (params[0] >= (4 * 4))
+		{
+			radius = amx_ctof(params[4]);
+		}
+
+		if (params[0] >= (5 * 4))
+		{
+			if (!IsValidPathType(params[5], true))
+			{
+				write_invalid_conn();
+				return 0;
+			}
+			type = static_cast<PathType>(params[5]);
+		}
+
+		if (params[0] >= (6 * 4))
+		{
+			max_z_diff = amx_ctof(params[6]);
+		}
+
+		if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) ||
+		    !std::isfinite(radius) || !std::isfinite(max_z_diff) ||
+		    radius < 0.0f || max_z_diff <= 0.0f)
+		{
+			write_invalid_conn();
+			return 0;
+		}
+
+		int out_conn_id = INVALID_CONNECTION_ID;
+		bool in_road = false;
+		{
+			std::shared_lock<std::shared_mutex> lock(Container::GetGraphMutex());
+			in_road = Container::Connections::IsPointInRoad(x, y, z, radius, type, max_z_diff, out_conn_id, has_conn_ref);
+		}
+
+		if (has_conn_ref)
+		{
+			WriteRef(amx, params[7], in_road ? out_conn_id : INVALID_CONNECTION_ID);
+		}
+
+		return in_road ? 1 : 0;
 	}
 
 
@@ -4763,6 +4828,7 @@ AMX_NATIVE_INFO PluginNatives[] =
 
 	DEFINE_NATIVE(GetClosestPointOnRoad),
 	DEFINE_NATIVE(GetRoadPositionInfo),
+	DEFINE_NATIVE_BOOL(IsPointInValidRoad),
 	DEFINE_NATIVE(IsPointAgainstTraffic),
 
 	DEFINE_NATIVE(GetPathTurnDirection),

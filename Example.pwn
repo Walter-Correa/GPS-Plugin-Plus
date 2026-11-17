@@ -865,6 +865,30 @@ DemonstrateHeightClearance(MapNode:startNode, MapNode:destNode)
 }
 
 // -----------------------------------------------------------------------------
+// Example 31: Road Containment Check (IsPointInValidRoad / IsPointInValidRoadEx)
+// -----------------------------------------------------------------------------
+DemonstrateRoadContainment(Float:x, Float:y, Float:z)
+{
+    printf("\n--- [Demo 31: Road Containment Check (IsPointInValidRoad / IsPointInValidRoadEx)] ---");
+
+    if (IsPointInValidRoad(x, y, z, 0.5))
+    {
+        new Connection:conn;
+        if (IsPointInValidRoadEx(x, y, z, 0.5, PATH_TYPE_VEHICLE, 4.0, conn))
+        {
+            new Float:w, l, r;
+            GetConnectionLaneInfo(conn, w, l, r);
+            printf("Coordinate (%.1f, %.1f, %.1f) is on road connection %d (width=%.1fm, lanes=%d+%d).",
+                x, y, z, _:conn, w, l, r);
+        }
+    }
+    else
+    {
+        printf("Coordinate (%.1f, %.1f, %.1f) is off-road.", x, y, z);
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Main Entry: Executes test suite
 // -----------------------------------------------------------------------------
 main()
@@ -919,6 +943,7 @@ main()
     }
 
     DemonstrateRoadSnappingAndParking(lsDowntownX, lsDowntownY, lsDowntownZ);
+    DemonstrateRoadContainment(lsDowntownX, lsDowntownY, lsDowntownZ);
     DemonstrateSafeRandomNode(1400.0, -1800.0, 1600.0, -1600.0);
     DemonstrateNearestServiceByRoad(lsDowntownX, lsDowntownY, lsDowntownZ);
 

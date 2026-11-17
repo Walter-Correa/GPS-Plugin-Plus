@@ -8,9 +8,9 @@
 #define _gps_included
 
 #define GPS_PLUGIN_VERSION_MAJOR        2
-#define GPS_PLUGIN_VERSION_MINOR        1
+#define GPS_PLUGIN_VERSION_MINOR        2
 #define GPS_PLUGIN_VERSION_PATCH        0
-#define GPS_PLUGIN_VERSION_STRING       "2.1.0"
+#define GPS_PLUGIN_VERSION_STRING       "2.2.0"
 
 
 const MapNode:GPS_INVALID_MAP_NODE_ID = MapNode:-1;
@@ -158,6 +158,8 @@ native bool:IsConnectionBlocked(Connection:connectionid);
 
 native GetClosestPointOnRoad(Float:x, Float:y, Float:z, &Float:out_x, &Float:out_y, &Float:out_z, &Float:angle, &Connection:connectionid = INVALID_CONNECTION_ID, PathType:type = PATH_TYPE_VEHICLE);
 native GetRoadPositionInfo(Float:x, Float:y, Float:z, &Float:out_x, &Float:out_y, &Float:out_z, &Float:angle, &Float:road_width, RoadPosition:pos = ROAD_POS_CURB, PathType:type = PATH_TYPE_VEHICLE);
+native bool:IsPointInValidRoad(Float:x, Float:y, Float:z, Float:radius = 0.0, PathType:type = PATH_TYPE_VEHICLE, Float:max_z_diff = 4.0);
+native bool:IsPointInValidRoadEx(Float:x, Float:y, Float:z, Float:radius = 0.0, PathType:type = PATH_TYPE_VEHICLE, Float:max_z_diff = 4.0, &Connection:connectionid = INVALID_CONNECTION_ID) = IsPointInValidRoad;
 native IsPointAgainstTraffic(Float:x, Float:y, Float:z, Float:facing_angle, &bool:against_traffic);
 
 native GetPathTurnDirection(Path:pathid, index, &TurnDirection:turn, &Float:turn_angle);

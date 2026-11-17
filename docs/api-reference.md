@@ -307,6 +307,47 @@ Snaps a coordinate to the road centerline (`ROAD_POS_CENTER`), sidewalk curb (`R
 
 ---
 
+### `IsPointInValidRoad` / `IsPointInValidRoadEx`
+```pawn
+native bool:IsPointInValidRoad(
+    Float:x, Float:y, Float:z,
+    Float:radius = 0.0,
+    PathType:type = PATH_TYPE_VEHICLE,
+    Float:max_z_diff = 4.0
+);
+
+native bool:IsPointInValidRoadEx(
+    Float:x, Float:y, Float:z,
+    Float:radius = 0.0,
+    PathType:type = PATH_TYPE_VEHICLE,
+    Float:max_z_diff = 4.0,
+    &Connection:connectionid = INVALID_CONNECTION_ID
+) = IsPointInValidRoad;
+```
+Determines whether `(x, y, z)` lies within the real geometry of at least one road connection, independently of how far the point is from the nearest map node along long straight segments.
+* **Capsule rule:** Each eligible connection segment $A \to B$ is evaluated by clamping the 2D projection parameter $t \in [0, 1]$ (forming a capsule with rounded ends covering curves and intersections). A connection contains the point if the 2D lateral distance to the projected point $Q$ satisfies $d \le \text{road\_width} \times 0.5 + \text{radius}$ and the vertical separation satisfies $|z - Q_z| \le \text{max\_z\_diff}$ (where $Q_z$ is linearly interpolated between $A_z$ and $B_z$).
+* **`IsPointInValidRoad` (fast check):** Stops immediately and returns `true` on the first matching road connection (`early exit`).
+* **`IsPointInValidRoadEx` (best-match lookup):** Evaluates all matching candidates and writes to `connectionid` the connection with the smallest normalized lateral deviation $d / (\text{road\_width} \times 0.5 + \text{radius})$, or `INVALID_CONNECTION_ID` when it returns `false`.
+* **`radius`:** Extra lateral tolerance in meters (`0.0` = exact roadbed half-width; larger values include curbs/shoulders). Returns `false` if `< 0.0`.
+* **`type`:** Graph modality filter (`PATH_TYPE_VEHICLE`, `PATH_TYPE_PEDESTRIAN`, `PATH_TYPE_BOAT`, or `PATH_TYPE_ANY`).
+* **`max_z_diff`:** Maximum vertical tolerance in meters from the interpolated roadbed elevation (separates overpasses/viaducts from streets underneath). Returns `false` if `<= 0.0`.
+* **Returns:** `true` if the point lies on a matching road segment; `false` otherwise or if parameters are invalid.
+
+```pawn
+// Fast boolean check (early exit on first match)
+if (IsPointInValidRoad(px, py, pz, 0.5))
+{
+    new Connection:conn;
+    // Full scan returning best matching connection
+    if (IsPointInValidRoadEx(px, py, pz, 0.5, PATH_TYPE_VEHICLE, 4.0, conn))
+    {
+        printf("On road (connection %d).", _:conn);
+    }
+}
+```
+
+---
+
 ## 4. Pathfinding & Routing
 
 > [!IMPORTANT]

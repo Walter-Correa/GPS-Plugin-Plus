@@ -90,6 +90,7 @@ namespace Container
 		void Delete(Connection* connection);
 		Connection* Find(int id);
 		bool FindClosestRoadPoint(float x, float y, float z, float& out_x, float& out_y, float& out_z, float& out_angle, float& out_road_width, int& out_conn_id, PathType type = PATH_TYPE_VEHICLE);
+		bool IsPointInRoad(float x, float y, float z, float radius, PathType type, float max_z_diff, int& out_conn_id, bool find_best_conn = true);
 		std::vector<RoadCandidate> FindRoadCandidates(float x, float y, float z, float max_radius, PathType type = PATH_TYPE_VEHICLE, int required_component = -1);
 		const std::unordered_map<int, Connection*>& GetAll();
 		int GetHighestID();
